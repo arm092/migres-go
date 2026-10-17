@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arm092/migres-go/internal/charset"
 	"github.com/arm092/migres-go/internal/config"
 	"github.com/arm092/migres-go/internal/journal"
 	"github.com/arm092/migres-go/internal/model"
@@ -21,9 +22,10 @@ import (
 )
 
 type MySQL struct {
-	DB     *sql.DB
-	Config config.Config
-	TLS    *tls.Config
+	DatabaseCharset string
+	DB              *sql.DB
+	Config          config.Config
+	TLS             *tls.Config
 }
 
 func Open(c config.Config) (*MySQL, error) {
@@ -104,7 +106,7 @@ func (m *MySQL) Check(ctx context.Context) error {
 	if m.Config.Migration.CDC.UseGTID && gtid != "ON" {
 		return fmt.Errorf("use_gtid requires gtid_mode=ON")
 	}
-	return nil
+	return m.DB.QueryRowContext(ctx, "SELECT DEFAULT_CHARACTER_SET_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?", m.Config.MySQL.Database).Scan(&m.DatabaseCharset)
 }
 func (m *MySQL) Position(ctx context.Context) (model.Position, error) {
 	rows, err := m.DB.QueryContext(ctx, "SHOW MASTER STATUS")
@@ -165,17 +167,24 @@ func (m *MySQL) Tables(ctx context.Context) ([]string, error) {
 }
 func (m *MySQL) Schema(ctx context.Context, table string) (model.Schema, error) {
 	s := model.Schema{Database: m.Config.MySQL.Database, Table: table, Generation: journal.ID()}
-	rows, err := m.DB.QueryContext(ctx, "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION", s.Database, table)
+	rows, err := m.DB.QueryContext(ctx, "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA, CHARACTER_SET_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION", s.Database, table)
 	if err != nil {
 		return s, err
 	}
 	for rows.Next() {
 		var col model.Column
 		var nullable, extra string
-		var def sql.NullString
-		if err = rows.Scan(&col.Name, &col.MySQLType, &nullable, &def, &extra); err != nil {
+		var def, sourceCharset sql.NullString
+		if err = rows.Scan(&col.Name, &col.MySQLType, &nullable, &def, &extra, &sourceCharset); err != nil {
 			rows.Close()
 			return s, err
+		}
+		col.Charset = sourceCharset.String
+		if col.Charset != "" && col.Charset != "binary" {
+			if err := charset.Validate(col.Charset); err != nil {
+				rows.Close()
+				return s, err
+			}
 		}
 		col.Nullable = nullable == "YES"
 		col.Generated = strings.Contains(extra, "GENERATED")
@@ -262,6 +271,7 @@ func (m *MySQL) Schema(ctx context.Context, table string) (model.Schema, error) 
 	if e != nil {
 		return s, e
 	}
+	s.Charset = parsed.Charset
 	for i := range s.Columns {
 		for _, col := range parsed.Columns {
 			if col.Name == s.Columns[i].Name {

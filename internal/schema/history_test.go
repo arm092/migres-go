@@ -61,3 +61,54 @@ func TestKeyChangesPreserveEnforcedIdentity(t *testing.T) {
 		t.Fatalf("configured identity changed: %+v %v", next, err)
 	}
 }
+
+func TestHistoricalCharsets(t *testing.T) {
+	c := config.Default()
+	s, err := FromCreate("CREATE TABLE t (id VARCHAR(10) PRIMARY KEY,v TEXT,b BLOB) DEFAULT CHARSET=latin1", "db", "g", c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Charset != "latin1" || s.Columns[0].Charset != "latin1" || s.Columns[2].Charset != "binary" {
+		t.Fatalf("%+v", s)
+	}
+	next, rebuild, err := Apply(s, "ALTER TABLE t DEFAULT CHARSET=utf8mb4, ADD COLUMN x VARCHAR(10)", c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebuild || next.Columns[0].Charset != "latin1" || next.Columns[3].Charset != "utf8mb4" {
+		t.Fatalf("%+v rebuild=%v", next, rebuild)
+	}
+	next, rebuild, err = Apply(next, "ALTER TABLE t CONVERT TO CHARACTER SET utf8mb4", c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rebuild || next.Columns[0].Charset != "utf8mb4" || next.Columns[1].Charset != "utf8mb4" {
+		t.Fatalf("%+v", next)
+	}
+	s, err = FromCreate("CREATE TABLE t (id INT PRIMARY KEY,v VARCHAR(20))", "db", "g", c, "latin1")
+	if err != nil || s.Columns[1].Charset != "latin1" {
+		t.Fatalf("%+v %v", s, err)
+	}
+	for _, q := range []string{"ALTER DATABASE db CHARACTER SET utf8mb4", "DROP DATABASE db"} {
+		found, err := ReferencesDatabase(q, "", "db")
+		if err != nil || !found {
+			t.Fatalf("database DDL ignored %s %v", q, err)
+		}
+	}
+}
+
+func TestColumnCollationDeterminesHistoricalCharset(t *testing.T) {
+	c := config.Default()
+	s, err := FromCreate("CREATE TABLE t(id INT PRIMARY KEY,v VARCHAR(10) COLLATE latin1_bin) DEFAULT CHARSET=utf8mb4", "db", "g", c)
+	if err != nil || s.Columns[1].Charset != "latin1" {
+		t.Fatalf("%+v %v", s, err)
+	}
+	next, _, err := Apply(s, "ALTER TABLE t ADD COLUMN x VARCHAR(10) COLLATE latin1_bin", c)
+	if err != nil || next.Columns[2].Charset != "latin1" {
+		t.Fatalf("%+v %v", next, err)
+	}
+	next, _, err = Apply(s, "ALTER TABLE t ADD COLUMN x VARCHAR(10), DEFAULT CHARSET=latin1", c)
+	if err != nil || next.Columns[2].Charset != "latin1" {
+		t.Fatalf("%+v %v", next, err)
+	}
+}

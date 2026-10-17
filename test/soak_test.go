@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/arm092/migres-go/internal/app"
+	"github.com/arm092/migres-go/internal/pipeline"
 	"github.com/arm092/migres-go/internal/sink"
 	"github.com/arm092/migres-go/internal/source"
+	gm "github.com/go-mysql-org/go-mysql/mysql"
 )
 
 // Opt-in acceptance run. Every cycle reconciles all keys and values; periodic
@@ -27,7 +29,6 @@ func TestSoak(t *testing.T) {
 		t.Fatal("invalid soak duration")
 	}
 	c := testConfig(t)
-	c.Migration.CDC.ServerID = 64380
 	c.Migration.BatchRows = 25
 	c.Migration.CDC.ProducerFlush = 50 * time.Millisecond
 	c.Migration.CDC.BatchMaxWait = 50 * time.Millisecond
@@ -144,6 +145,10 @@ func TestSoak(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
+		boundary, e := m.Position(ctx)
+		if e != nil {
+			t.Fatal(e)
+		}
 		cycleCtx, stop := context.WithTimeout(ctx, 45*time.Second)
 		wait(t, cycleCtx, func() bool {
 			r, e := peer.Conn.Query(cycleCtx, "SELECT tenant,id,value FROM `"+name+"` FINAL WHERE _migres_deleted=0 ORDER BY tenant,id")
@@ -159,7 +164,24 @@ func TestSoak(t *testing.T) {
 				}
 				actual = append(actual, v)
 			}
-			return r.Err() == nil && fmt.Sprint(actual) == fmt.Sprint(expected)
+			if r.Err() != nil || fmt.Sprint(actual) != fmt.Sprint(expected) {
+				return false
+			}
+			out, e := app.Control(cycleCtx, c, app.Request{Command: "status"})
+			if e != nil || out.Stats == nil || !pipeline.Reached(out.Stats.Checkpoint, boundary) {
+				return false
+			}
+			if boundary.GTID != "" {
+				seen, e := gm.ParseGTIDSet("mysql", out.Stats.Checkpoint.GTID)
+				if e != nil {
+					return false
+				}
+				want, e := gm.ParseGTIDSet("mysql", boundary.GTID)
+				if e != nil || !seen.Contain(want) {
+					return false
+				}
+			}
+			return true
 		})
 		stop()
 		if cycle%30 == 0 {

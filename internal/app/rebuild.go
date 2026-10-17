@@ -150,6 +150,16 @@ func (a *App) rebuild(ctx context.Context, t model.Task) error {
 			if pipeline.Reached(prepared, state.Boundary) {
 				break
 			}
+			stats, err := a.Store.Stats()
+			if err != nil {
+				return err
+			}
+			if stats.Events == 0 && stats.Bytes >= a.Config.MaxQueueBytes {
+				return fmt.Errorf("rebuild catch-up reached max_queue_bytes; increase queue capacity before resuming")
+			}
+			if err = a.Store.CheckDisk(uint64(a.Config.MinFreeDiskBytes)); err != nil {
+				return fmt.Errorf("rebuild catch-up needs free journal disk space: %w", err)
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -186,13 +196,13 @@ func (a *App) rebuild(ctx context.Context, t model.Task) error {
 		}
 		shape := func(s model.Schema) string {
 			type column struct {
-				Name, Type string
-				Nullable   bool
-				Elements   []string
+				Name, Type, Charset string
+				Nullable            bool
+				Elements            []string
 			}
 			cols := []column{}
 			for _, c := range s.Columns {
-				cols = append(cols, column{c.Name, c.CHType, c.Nullable, c.Elements})
+				cols = append(cols, column{c.Name, c.CHType, c.Charset, c.Nullable, c.Elements})
 			}
 			b, _ := json.Marshal(struct {
 				Columns []column

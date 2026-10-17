@@ -201,6 +201,23 @@ type databaseVisitor struct {
 }
 
 func (v *databaseVisitor) Enter(n ast.Node) (ast.Node, bool) {
+	var database string
+	switch x := n.(type) {
+	case *ast.AlterDatabaseStmt:
+		database = x.Name.O
+		if database == "" {
+			database = v.defaultDatabase
+		}
+	case *ast.DropDatabaseStmt:
+		database = x.Name.O
+	}
+	if database != "" {
+		v.databases[database] = true
+		if database == v.wanted {
+			v.found = true
+		}
+	}
+
 	if t, ok := n.(*ast.TableName); ok {
 		db := t.Schema.O
 		if db == "" {

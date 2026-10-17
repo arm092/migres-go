@@ -29,7 +29,7 @@ func TestCrashHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	if err = a.Run(context.Background()); err != nil {
+	if err = a.Serve(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -37,7 +37,6 @@ func TestCrashHelper(t *testing.T) {
 // Killing the actual journal owner exercises recovery without deferred cleanup.
 func TestProcessKillRecovery(t *testing.T) {
 	c := testConfig(t)
-	c.Migration.CDC.ServerID = 64379
 	c.Migration.BatchRows = 20
 	name := fmt.Sprintf("crash_%d", time.Now().UnixNano())
 	c.MySQL.Include = []string{name}

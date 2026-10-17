@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/arm092/migres-go/internal/model"
@@ -77,8 +79,38 @@ func (a *App) validateForwardSchema(ctx context.Context, from, to model.Position
 				if kind == "Query" {
 					q := strings.ToUpper(strings.TrimSpace(info))
 					if q != "BEGIN" && q != "COMMIT" && q != "ROLLBACK" {
-						e = fmt.Errorf("forward gap contains SQL without retained schema history; use resnapshot")
-						break
+						refs, parseErr := schema.QueryTables(info, a.Config.MySQL.Database)
+						if parseErr != nil || len(refs) == 0 {
+							e = fmt.Errorf("forward gap contains unknown SQL; use resnapshot")
+							break
+						}
+						for _, ref := range refs {
+							if ref.Database != a.Config.MySQL.Database || ref.Table == a.Config.Migration.SignalTable {
+								continue
+							}
+							ignored := false
+							for _, name := range a.Config.MySQL.Exclude {
+								if name == ref.Table {
+									ignored = true
+									break
+								}
+							}
+							if ignored {
+								continue
+							}
+							_, schemaErr := a.Store.Schema(ref.Table)
+							if schemaErr != nil && !errors.Is(schemaErr, os.ErrNotExist) {
+								e = schemaErr
+								break
+							}
+							if a.Config.Allowed(ref.Table) || schemaErr == nil {
+								e = fmt.Errorf("forward gap contains SQL without retained schema history; use resnapshot")
+								break
+							}
+						}
+						if e != nil {
+							break
+						}
 					}
 				}
 				if end <= uint64(position) {

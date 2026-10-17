@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"strings"
 	"time"
 
@@ -191,7 +192,28 @@ func (p *Producer) Run(ctx context.Context) error {
 			inTransaction = false
 			transactionGTID = nil
 		case *replication.QueryEvent:
-			q := strings.TrimSpace(string(x.Query))
+			var queryText string
+			for attempt := 0; ; attempt++ {
+				var e error
+				queryText, e = p.Source.QueryText(ctx, x.Query, x.StatusVars)
+				if e == nil {
+					break
+				}
+				if ctx.Err() != nil {
+					return nil
+				}
+				if !Transient(e) {
+					return e
+				}
+				delay := time.Second << min(attempt, 5)
+				delay += time.Duration(rand.Int64N(int64(delay/4 + 1)))
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(delay):
+				}
+			}
+			q := strings.TrimSpace(queryText)
 			upper := strings.ToUpper(q)
 			switch upper {
 			case "BEGIN":
@@ -282,7 +304,7 @@ func (p *Producer) Run(ctx context.Context) error {
 			var remove []string
 			switch d.Kind {
 			case "create":
-				fresh, e := schema.FromCreate(q, c.MySQL.Database, journal.ID(), c)
+				fresh, e := schema.FromCreate(q, c.MySQL.Database, journal.ID(), c, p.Source.DatabaseCharset)
 				if e != nil {
 					return e
 				}
@@ -387,7 +409,7 @@ func (p *Producer) Run(ctx context.Context) error {
 			e := model.Event{Table: table, Schema: &s, SourceID: fmt.Sprintf("%s:%d", file, next.Pos)}
 			normalized := make([][]model.Value, len(x.Rows))
 			for i, row := range x.Rows {
-				normalized[i], err = source.NormalizeRow(s, row)
+				normalized[i], err = source.NormalizeBinlogRow(s, row)
 				if err != nil {
 					return err
 				}

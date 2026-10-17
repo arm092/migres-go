@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"strconv"
 	"testing"
@@ -19,6 +20,7 @@ func testConfig(t *testing.T) config.Config {
 		t.Skip("set MIGRES_INTEGRATION=1 after starting test/compose.yml")
 	}
 	c := config.Default()
+	c.Migration.CDC.ServerID = 100000 + rand.Uint32()%3000000000
 	if host := os.Getenv("MIGRES_TEST_HOST"); host != "" {
 		c.MySQL.Host = host
 		c.ClickHouse.Host = host
@@ -161,6 +163,14 @@ func TestSnapshotCDCAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	if boundary.GTID != "" {
+		defer func() {
+			if t.Failed() {
+				known, err := a.Store.Boundary(boundary.File, boundary.Pos)
+				stats, _ := a.Store.Stats()
+				t.Logf("expected boundary=%+v stored=%+v err=%v checkpoint=%+v", boundary, known, err, stats.Checkpoint)
+			}
+		}()
+
 		wait(t, ctx, func() bool {
 			points, e := a.Store.Boundaries()
 			if e != nil {

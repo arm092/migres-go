@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,7 +40,7 @@ func testControlRepositionAndOwnedReset(t *testing.T, useGTID bool) {
 	c.Listen = "127.0.0.1:0"
 	c.ShutdownTimeout = 5 * time.Second
 	c.Migration.CDC.UseGTID = useGTID
-	c.Migration.CDC.ServerID = 54379
+	c.Migration.CDC.ServerID = 100000 + rand.Uint32()%3000000000
 	name := fmt.Sprintf("control_%d", time.Now().UnixNano())
 	c.MySQL.Include = []string{name}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)

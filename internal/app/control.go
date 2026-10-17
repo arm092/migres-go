@@ -193,6 +193,9 @@ func (a *App) Serve(ctx context.Context) error {
 			}
 			return nil
 		case err := <-done:
+			if err != nil {
+				a.Store.SetMeta("last_error", err.Error())
+			}
 			if err == nil && a.Config.Migration.Mode == "snapshot" {
 				stop()
 				return nil

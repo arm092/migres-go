@@ -62,3 +62,14 @@ func TestQualifiedDDLDatabaseScope(t *testing.T) {
 		}
 	}
 }
+
+func TestBinlogQueryReferences(t *testing.T) {
+	refs, err := QueryTables("use `other`; RENAME TABLE `source`.`orders` TO `source`.`old_orders`", "fallback")
+	if err != nil || len(refs) != 2 || refs[0].Database != "source" || refs[1].Table != "old_orders" {
+		t.Fatal(refs, err)
+	}
+	refs, err = QueryTables("use `source`; ALTER TABLE orders ADD COLUMN x INT", "fallback")
+	if err != nil || len(refs) != 1 || refs[0].Database != "source" || refs[0].Table != "orders" {
+		t.Fatal(refs, err)
+	}
+}

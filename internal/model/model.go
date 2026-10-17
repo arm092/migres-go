@@ -68,6 +68,7 @@ func (v Value) SQL() any {
 }
 
 type Column struct {
+	Charset   string   `json:"charset,omitempty"`
 	Elements  []string `json:"elements,omitempty"`
 	Name      string   `json:"name"`
 	MySQLType string   `json:"mysql_type"`
@@ -77,6 +78,7 @@ type Column struct {
 	Generated bool     `json:"generated,omitempty"`
 }
 type Schema struct {
+	Charset    string   `json:"charset,omitempty"`
 	Revision   string   `json:"revision"`
 	Database   string   `json:"database"`
 	Table      string   `json:"table"`

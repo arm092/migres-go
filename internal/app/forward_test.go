@@ -50,11 +50,20 @@ func TestForwardGapRejectsMissingDDLHistory(t *testing.T) {
 			a.Sink.DropOwned(context.Background(), s)
 		}
 	}()
+	if _, err = a.Source.DB.ExecContext(ctx, "CREATE TABLE `"+name+"_ignored`(id INT PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	defer a.Source.DB.Exec("DROP TABLE IF EXISTS `" + name + "_ignored`")
 	if _, err = a.Source.DB.ExecContext(ctx, "INSERT INTO `"+name+"` VALUES(1,10)"); err != nil {
 		t.Fatal(err)
 	}
 	p, err := a.Source.Position(ctx)
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Persist the exact observed source boundary. Other fixture clients may
+	// commit before validation, so it need not remain the current log end.
+	if err = a.Store.RememberBoundary(p); err != nil {
 		t.Fatal(err)
 	}
 	r := Request{Command: "reposition", File: p.File, Pos: p.Pos, AllowGap: true}
@@ -70,6 +79,9 @@ func TestForwardGapRejectsMissingDDLHistory(t *testing.T) {
 	}
 	p, err = a.Source.Position(ctx)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err = a.Store.RememberBoundary(p); err != nil {
 		t.Fatal(err)
 	}
 	r = Request{Command: "reposition", File: p.File, Pos: p.Pos, AllowGap: true}

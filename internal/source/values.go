@@ -7,7 +7,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/arm092/migres-go/internal/charset"
 	"github.com/arm092/migres-go/internal/model"
+	"unicode/utf8"
 )
 
 func NormalizeRow(s model.Schema, values []any) ([]model.Value, error) {
@@ -21,6 +23,14 @@ func NormalizeRow(s model.Schema, values []any) ([]model.Value, error) {
 		if v == nil {
 			out[i] = model.Encode(nil)
 			continue
+		}
+		if textColumn(col) && !strings.HasPrefix(typ, "enum(") && !strings.HasPrefix(typ, "set(") {
+			if b, ok := v.([]byte); ok {
+				v = string(b)
+			}
+			if text, ok := v.(string); ok && !utf8.ValidString(text) {
+				return nil, fmt.Errorf("invalid UTF-8 snapshot text")
+			}
 		}
 		encodedNumber := model.Encode(v)
 		if strings.Contains(typ, "unsigned") && encodedNumber.Kind == "int" {
@@ -97,4 +107,41 @@ func NormalizeRow(s model.Schema, values []any) ([]model.Value, error) {
 		out[i] = model.Encode(v)
 	}
 	return out, nil
+}
+
+func textColumn(c model.Column) bool {
+	t := strings.ToLower(c.MySQLType)
+	return c.Charset != "binary" && (strings.HasPrefix(t, "char") || strings.HasPrefix(t, "varchar") || strings.Contains(t, "text"))
+}
+
+// Snapshot SELECTs are already transcoded by MySQL to utf8mb4; binlog strings
+// retain the column encoding. Never transcode BINARY/VARBINARY/BLOB payloads.
+func NormalizeBinlogRow(s model.Schema, values []any) ([]model.Value, error) {
+	if len(values) != len(s.Columns) {
+		return nil, fmt.Errorf("row shape mismatch")
+	}
+	normalized := append([]any(nil), values...)
+	for i, col := range s.Columns {
+		if values[i] == nil || !textColumn(col) {
+			continue
+		}
+		if col.Charset == "" {
+			return nil, fmt.Errorf("missing historical charset for %s", col.Name)
+		}
+		var raw []byte
+		switch v := values[i].(type) {
+		case string:
+			raw = []byte(v)
+		case []byte:
+			raw = v
+		default:
+			return nil, fmt.Errorf("unexpected source text representation")
+		}
+		text, err := charset.Decode(col.Charset, raw)
+		if err != nil {
+			return nil, err
+		}
+		normalized[i] = text
+	}
+	return NormalizeRow(s, normalized)
 }

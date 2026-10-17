@@ -73,6 +73,13 @@ func (a *App) Check(ctx context.Context) error {
 	if err := a.Store.Meta("source_uuid", &old); err == nil && uuid != old {
 		return fmt.Errorf("source identity changed; explicit recovery required")
 	}
+	var charset string
+	if err := a.Store.Meta("database_charset", &charset); err == nil && charset != a.Source.DatabaseCharset {
+		return fmt.Errorf("source database default charset changed; explicit reset and resnapshot required")
+	}
+	if err := a.Store.SetMeta("database_charset", a.Source.DatabaseCharset); err != nil {
+		return err
+	}
 	return a.Store.SetMeta("source_uuid", uuid)
 }
 func (a *App) bootstrap(ctx context.Context) error {

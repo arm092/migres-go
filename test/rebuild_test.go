@@ -109,3 +109,80 @@ func TestPrimaryKeyChangeRebuild(t *testing.T) {
 		return e == nil && n == 0
 	})
 }
+
+func TestRebuildCapacityRecovery(t *testing.T) {
+	c := testConfig(t)
+	name := fmt.Sprintf("capacity_%d", time.Now().UnixNano())
+	c.MySQL.Include = []string{name}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	m, err := source.Open(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	exec := func(q string) {
+		t.Helper()
+		if _, err := m.DB.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec("CREATE TABLE `" + name + "`(id BIGINT PRIMARY KEY,value INT NOT NULL)")
+	defer m.DB.Exec("DROP TABLE IF EXISTS `" + name + "`")
+	exec("INSERT INTO `" + name + "` VALUES(1,1)")
+	func() {
+		a, e := app.Open(c)
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer a.Close()
+		run, stop := context.WithCancel(ctx)
+		done := make(chan error, 1)
+		go func() { done <- a.Run(run) }()
+		defer func() {
+			stop()
+			if e := <-done; e != nil {
+				t.Error(e)
+			}
+		}()
+		wait(t, ctx, func() bool { return a.Ready.Load() })
+	}()
+	exec("ALTER TABLE `" + name + "` MODIFY COLUMN value BIGINT NOT NULL")
+	exec("UPDATE `" + name + "` SET value=5000000000")
+	c.MaxQueueBytes = 128
+	func() {
+		a, e := app.Open(c)
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer a.Close()
+		e = a.Run(ctx)
+		if e == nil || !strings.Contains(e.Error(), "max_queue_bytes") {
+			t.Fatalf("capacity did not fail closed: %v", e)
+		}
+		stats, e := a.Store.Stats()
+		if e != nil || stats.Tasks == 0 {
+			t.Fatalf("coordinator was lost: %+v %v", stats, e)
+		}
+	}()
+	c.MaxQueueBytes = 10 << 30
+	a, err := app.Open(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	run, stop := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- a.Run(run) }()
+	defer func() {
+		stop()
+		if e := <-done; e != nil {
+			t.Error(e)
+		}
+	}()
+	wait(t, ctx, func() bool {
+		var value int64
+		e := a.Sink.Conn.QueryRow(ctx, "SELECT value FROM `"+name+"` FINAL WHERE _migres_deleted=0").Scan(&value)
+		return a.Ready.Load() && e == nil && value == 5000000000
+	})
+}

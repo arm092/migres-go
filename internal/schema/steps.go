@@ -31,7 +31,7 @@ func AlterSteps(sql string, c config.Config) ([]AlterStep, error) {
 		switch sp.Tp {
 		case ast.AlterTableAddColumns:
 			for _, def := range sp.NewColumns {
-				col, err := column(def, c)
+				col, err := column(def, c, "utf8mb4")
 				if err != nil {
 					return nil, err
 				}
@@ -43,7 +43,7 @@ func AlterSteps(sql string, c config.Config) ([]AlterStep, error) {
 			out = append(out, AlterStep{Kind: "rename", Name: sp.OldColumnName.Name.O, NewName: sp.NewColumnName.Name.O})
 		case ast.AlterTableModifyColumn, ast.AlterTableChangeColumn:
 			for _, def := range sp.NewColumns {
-				col, err := column(def, c)
+				col, err := column(def, c, "utf8mb4")
 				if err != nil {
 					return nil, err
 				}
