@@ -13,7 +13,12 @@ import (
 	"github.com/arm092/migres-go/internal/source"
 )
 
-func TestControlRepositionAndOwnedReset(t *testing.T) {
+func TestControl(t *testing.T) {
+	for _, useGTID := range []bool{false, true} {
+		t.Run(fmt.Sprintf("gtid_reader_%t", useGTID), func(t *testing.T) { testControlRepositionAndOwnedReset(t, useGTID) })
+	}
+}
+func testControlRepositionAndOwnedReset(t *testing.T, useGTID bool) {
 	if os.Getenv("MIGRES_INTEGRATION") != "1" {
 		t.Skip("requires isolated test/compose.yml")
 	}
@@ -33,7 +38,7 @@ func TestControlRepositionAndOwnedReset(t *testing.T) {
 	c.RuntimeDir = filepath.Join(c.DataDir, "run")
 	c.Listen = "127.0.0.1:0"
 	c.ShutdownTimeout = 5 * time.Second
-	c.Migration.CDC.UseGTID = true
+	c.Migration.CDC.UseGTID = useGTID
 	c.Migration.CDC.ServerID = 54379
 	name := fmt.Sprintf("control_%d", time.Now().UnixNano())
 	c.MySQL.Include = []string{name}
@@ -93,6 +98,15 @@ func TestControlRepositionAndOwnedReset(t *testing.T) {
 	if err != nil || repeat.Operation.ID != "replay-one" {
 		t.Fatalf("idempotency: %+v %v", repeat, err)
 	}
+	response, err = Control(ctx, c, Request{Command: "reposition", GTID: baseline.GTID, ID: "gtid-replay-one"})
+	if err != nil || response.Operation.State != "done" {
+		t.Fatalf("GTID command: %+v %v", response, err)
+	}
+	until(func() bool {
+		var n int32
+		e := a.Sink.Conn.QueryRow(ctx, "SELECT value FROM `"+name+"` FINAL WHERE _migres_deleted=0").Scan(&n)
+		return a.Ready.Load() && e == nil && n == 20
+	})
 	foreign := name + "_foreign"
 	response, err = Control(ctx, c, Request{Command: "resnapshot", Table: name, ID: "copy-one"})
 	if err != nil || response.Operation.State != "queued" {

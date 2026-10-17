@@ -156,5 +156,22 @@ func TestSnapshotCDCAndRestart(t *testing.T) {
 	done = make(chan error, 1)
 	go func() { done <- a.Run(runCtx) }()
 	wait(t, ctx, func() bool { return a.Ready.Load() && count() == 2 })
-
+	boundary, err := m.Position(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if boundary.GTID != "" {
+		wait(t, ctx, func() bool {
+			points, e := a.Store.Boundaries()
+			if e != nil {
+				return false
+			}
+			for _, p := range points {
+				if p.File == boundary.File && p.Pos == boundary.Pos {
+					return p.GTID == boundary.GTID
+				}
+			}
+			return false
+		})
+	}
 }

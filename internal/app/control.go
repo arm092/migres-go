@@ -345,17 +345,11 @@ func (a *App) validateRequest(ctx context.Context, r Request) error {
 		}
 		target := model.Position{File: r.File, Pos: r.Pos}
 		if a.Config.Migration.CDC.UseGTID && r.GTID == "" {
-			boundaries, err := a.Store.Boundaries()
-			if err != nil {
+			p, err := a.Store.Boundary(r.File, r.Pos)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
-			found := false
-			for _, p := range boundaries {
-				if p.File == r.File && p.Pos == r.Pos && p.GTID != "" {
-					found = true
-				}
-			}
-			if !found {
+			if err != nil || p.GTID == "" {
 				return fmt.Errorf("GTID mode requires an exact retained file/position boundary with a GTID set")
 			}
 		}
@@ -389,7 +383,16 @@ func (a *App) validateRequest(ctx context.Context, r Request) error {
 			return err
 		}
 		if r.File == currentEnd.File && r.Pos == currentEnd.Pos {
-			return nil
+			return a.Store.RememberBoundary(currentEnd)
+		}
+		if currentEnd.GTID != "" {
+			p, e := a.Store.Boundary(r.File, r.Pos)
+			if e != nil && !errors.Is(e, os.ErrNotExist) {
+				return e
+			}
+			if e != nil || p.GTID == "" {
+				return fmt.Errorf("GTID-enabled source requires a retained boundary or current binlog end; use resnapshot")
+			}
 		}
 		rows, err := a.Source.DB.QueryContext(ctx, "SHOW BINLOG EVENTS IN "+schema.Literal(r.File)+" FROM "+fmt.Sprint(r.Pos)+" LIMIT 1")
 		if err != nil {
@@ -467,16 +470,13 @@ func (a *App) applyRequest(ctx context.Context, r Request) error {
 			if err != nil {
 				return err
 			}
-		} else if a.Config.Migration.CDC.UseGTID {
-			boundaries, err := a.Store.Boundaries()
-			if err != nil {
+		} else {
+			known, err := a.Store.Boundary(p.File, p.Pos)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
-			for _, known := range boundaries {
-				if known.File == p.File && known.Pos == p.Pos {
-					p.GTID = known.GTID
-					break
-				}
+			if err == nil {
+				p.GTID = known.GTID
 			}
 		}
 		schemas, err := a.schemasAt(p)

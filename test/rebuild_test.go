@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,7 +102,7 @@ func TestPrimaryKeyChangeRebuild(t *testing.T) {
 			return false
 		}
 		e = a.Sink.Conn.QueryRow(ctx, "SELECT sorting_key FROM system.tables WHERE database=? AND name=?", c.ClickHouse.Database, name).Scan(&key)
-		if e != nil || key != "replacement" {
+		if e != nil || strings.Trim(key, "() ") != "replacement" {
 			return false
 		}
 		e = a.Sink.Conn.QueryRow(ctx, "SELECT count() FROM `"+name+"` FINAL WHERE _migres_deleted=0 AND replacement=200").Scan(&n)

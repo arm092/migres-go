@@ -86,6 +86,7 @@ func (p *Producer) Run(ctx context.Context) error {
 	lastDiskCheck := time.Time{}
 	file := pos.File
 	inTransaction := false
+	var transactionGTID gm.GTIDSet
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -139,6 +140,12 @@ func (p *Producer) Run(ctx context.Context) error {
 			return fmt.Errorf("binlog stream: %w", err)
 		}
 		next := model.Position{File: file, Pos: ev.Header.LogPos, GTID: pos.GTID, Timestamp: int64(ev.Header.Timestamp)}
+		if transactionGTID != nil {
+			next.GTID, err = MergeGTID(next.GTID, transactionGTID)
+			if err != nil {
+				return err
+			}
+		}
 		switch x := ev.Event.(type) {
 		case *replication.RotateEvent:
 			file = string(x.NextLogName)
@@ -158,6 +165,13 @@ func (p *Producer) Run(ctx context.Context) error {
 			}
 		case *replication.GTIDEvent:
 			inTransaction = true
+			transactionGTID = nil
+			if ev.Header.EventType == replication.GTID_EVENT {
+				transactionGTID, err = x.GTIDNext()
+				if err != nil {
+					return err
+				}
+			}
 		case *replication.TransactionPayloadEvent:
 			return fmt.Errorf("compressed binlog transaction is unsupported; disable binlog_transaction_compression")
 		case *replication.XIDEvent:
@@ -165,7 +179,7 @@ func (p *Producer) Run(ctx context.Context) error {
 				return err
 			}
 			if x.GSet != nil {
-				next.GTID, err = MergeGTID(pos.GTID, x.GSet)
+				next.GTID, err = MergeGTID(next.GTID, x.GSet)
 				if err != nil {
 					return err
 				}
@@ -175,6 +189,7 @@ func (p *Producer) Run(ctx context.Context) error {
 			}
 			pos = next
 			inTransaction = false
+			transactionGTID = nil
 		case *replication.QueryEvent:
 			q := strings.TrimSpace(string(x.Query))
 			upper := strings.ToUpper(q)
@@ -188,7 +203,7 @@ func (p *Producer) Run(ctx context.Context) error {
 					return err
 				}
 				if x.GSet != nil {
-					next.GTID, err = MergeGTID(pos.GTID, x.GSet)
+					next.GTID, err = MergeGTID(next.GTID, x.GSet)
 					if err != nil {
 						return err
 					}
@@ -197,9 +212,11 @@ func (p *Producer) Run(ctx context.Context) error {
 					return err
 				}
 				pos = next
+				transactionGTID = nil
 				continue
 			case "ROLLBACK":
 				inTransaction = false
+				transactionGTID = nil
 				pending = nil
 				if err = p.Store.Rollback(); err != nil {
 					return err
@@ -223,7 +240,7 @@ func (p *Producer) Run(ctx context.Context) error {
 			}
 			if database != c.MySQL.Database {
 				if x.GSet != nil {
-					next.GTID, err = MergeGTID(pos.GTID, x.GSet)
+					next.GTID, err = MergeGTID(next.GTID, x.GSet)
 					if err != nil {
 						return err
 					}
@@ -233,6 +250,7 @@ func (p *Producer) Run(ctx context.Context) error {
 				}
 				pos = next
 				inTransaction = false
+				transactionGTID = nil
 				continue
 			}
 			if parseErr != nil {
@@ -246,7 +264,7 @@ func (p *Producer) Run(ctx context.Context) error {
 			}
 			if !allowed {
 				if x.GSet != nil {
-					next.GTID, err = MergeGTID(pos.GTID, x.GSet)
+					next.GTID, err = MergeGTID(next.GTID, x.GSet)
 					if err != nil {
 						return err
 					}
@@ -256,6 +274,7 @@ func (p *Producer) Run(ctx context.Context) error {
 				}
 				pos = next
 				inTransaction = false
+				transactionGTID = nil
 				continue
 			}
 			event := model.Event{Kind: "ddl", Table: d.Tables[0], Query: q, Position: next, SourceID: fmt.Sprintf("%s:%d", file, next.Pos)}
@@ -335,7 +354,7 @@ func (p *Producer) Run(ctx context.Context) error {
 				save = append(save, old)
 			}
 			if x.GSet != nil {
-				next.GTID, err = MergeGTID(pos.GTID, x.GSet)
+				next.GTID, err = MergeGTID(next.GTID, x.GSet)
 				if err != nil {
 					return err
 				}
@@ -346,6 +365,7 @@ func (p *Producer) Run(ctx context.Context) error {
 			}
 			pos = next
 			inTransaction = false
+			transactionGTID = nil
 		case *replication.RowsEvent:
 			if string(x.Table.Schema) != c.MySQL.Database {
 				continue
