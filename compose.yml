@@ -1,0 +1,18 @@
+services:
+  migres:
+    build: .
+    restart: unless-stopped
+    stop_grace_period: 90s
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+      - migres-data:/app/data
+    environment:
+      DATA_DIR: /app/data
+      RUNTIME_DIR: /app/data/run
+      LISTEN: 0.0.0.0:8080
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+    ports:
+      - 127.0.0.1:8080:8080
+volumes:
+  migres-data:

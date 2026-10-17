@@ -1,0 +1,104 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: migres
+spec:
+  clusterIP: None
+  selector:
+    app: migres
+  ports:
+    - name: metrics
+      port: 8080
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: migres
+spec:
+  serviceName: migres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: migres
+  template:
+    metadata:
+      labels:
+        app: migres
+    spec:
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: migres
+          image: ghcr.io/arm092/migres-go:latest
+          args: [run, --config, /etc/migres/config.yml]
+          env:
+            - name: DATA_DIR
+              value: /var/lib/migres
+            - name: RUNTIME_DIR
+              value: /var/lib/migres/run
+            - name: LISTEN
+              value: 0.0.0.0:8080
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: migres
+                  key: mysql-password
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: migres
+                  key: clickhouse-password
+          ports:
+            - name: metrics
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: '2'
+              memory: 1Gi
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: metrics
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: metrics
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/migres
+            - name: config
+              mountPath: /etc/migres
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: migres
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOncePod]
+        resources:
+          requests:
+            storage: 20Gi

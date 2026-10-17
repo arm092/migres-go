@@ -1,0 +1,62 @@
+name: CI
+on:
+  push:
+    branches: [master, 'tasks/**']
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go build ./cmd/migres
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - run: docker compose -p migres-go-test -f test/compose.yml up -d --wait
+      - run: go test ./test ./internal/app -v -count=1 -timeout=10m
+        env:
+          MIGRES_INTEGRATION: '1'
+      - if: always()
+        run: docker compose -p migres-go-test -f test/compose.yml down -v
+  integration:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql: ['5.7', '8.0', '8.4']
+        clickhouse: ['24.8', '26.8']
+    env:
+      MYSQL_IMAGE: mysql:${{ matrix.mysql }}
+      CLICKHOUSE_IMAGE: clickhouse/clickhouse-server:${{ matrix.clickhouse }}
+      MYSQL_GTID_MODE: ${{ matrix.mysql == '5.7' && 'OFF' || 'ON' }}
+      MIGRES_INTEGRATION: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+      - run: docker compose -p migres-go-test -f test/compose.yml up -d --wait mysql clickhouse
+      - run: go test ./test -v -count=1 -timeout=10m
+      - if: always()
+        run: docker compose -p migres-go-test -f test/compose.yml down -v
+  replicated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+      - run: docker compose -p migres-go-test -f test/compose.yml up -d --wait mysql
+      - run: docker compose -p migres-go-replicated -f test/replicated.yml up -d --wait
+      - run: go test ./test -run 'TestReplicated|TestReplicaLoss' -v -count=1 -timeout=10m
+        env:
+          MIGRES_INTEGRATION: '1'
+          MIGRES_REPLICATED: '1'
+          MIGRES_FAULTS: '1'
+      - if: always()
+        run: |
+          docker compose -p migres-go-test -f test/compose.yml down -v
+          docker compose -p migres-go-replicated -f test/replicated.yml down -v

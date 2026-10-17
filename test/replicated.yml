@@ -1,0 +1,37 @@
+services:
+  keeper:
+    image: clickhouse/clickhouse-keeper:24.8
+    volumes:
+      - ./keeper.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+  ch-r1:
+    image: clickhouse/clickhouse-server:24.8
+    environment:
+      REPLICA_NAME: r1
+      CLICKHOUSE_DB: migres_dst
+      CLICKHOUSE_PASSWORD: test-only
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: '1'
+    ports: ['127.0.0.1:39001:9000']
+    volumes:
+      - ./replicas.xml:/etc/clickhouse-server/config.d/replicas.xml:ro
+    depends_on: [keeper]
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8123/ping']
+      interval: 3s
+      timeout: 3s
+      retries: 60
+  ch-r2:
+    image: clickhouse/clickhouse-server:24.8
+    environment:
+      REPLICA_NAME: r2
+      CLICKHOUSE_DB: migres_dst
+      CLICKHOUSE_PASSWORD: test-only
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: '1'
+    ports: ['127.0.0.1:39002:9000']
+    volumes:
+      - ./replicas.xml:/etc/clickhouse-server/config.d/replicas.xml:ro
+    depends_on: [keeper]
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8123/ping']
+      interval: 3s
+      timeout: 3s
+      retries: 60

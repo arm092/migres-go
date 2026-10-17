@@ -1,0 +1,65 @@
+mysql:
+  host: 127.0.0.1
+  port: 3306
+  user: migres
+  database: source
+  include_tables: []
+  exclude_tables: []
+  keys: {}
+clickhouse:
+  host: 127.0.0.1
+  port: 9000
+  user: default
+  database: target
+  engine: ReplacingMergeTree
+  # engine: ReplicatedReplacingMergeTree
+  # cluster: analytics
+  replication:
+    path_prefix: /migres/tables
+    replica_macro: replica
+  write_ack:
+    mode: quorum
+    quorum: auto
+    timeout: 30s
+migration:
+  mode: cdc
+  batch_rows: 5000
+  workers: 4
+  consumer_workers: 4
+  clickhouse_timezone: UTC
+  low_cardinality_strings: false
+  snapshot_mode: auto
+  signal_table: _migres_signal
+  cdc:
+    snapshot_before: true
+    use_gtid: false
+    server_id: 4379
+    heartbeat: 5s
+    producer_flush_interval: 1s
+    transformer_poll_interval: 100ms
+    consumer_poll_interval: 100ms
+    producer_batch_size: 100
+    checkpoint_interval_rows: 1000
+    prepared_queries_batch_limit: 100
+    batch_max_wait: 1s
+    raw_events_max: 50000
+    raw_events_resume_ratio: 0.8
+    db_debug: false
+environment: prod
+data_dir: data
+runtime_dir: data/run
+listen: 127.0.0.1:8080
+shutdown_timeout: 60s
+max_queue_bytes: 10737418240
+max_transaction_bytes: 1073741824
+min_free_disk_bytes: 1073741824
+debug_retention: 24h
+notifications:
+  enabled: false
+  rate_limit: 1m
+  teams:
+    enabled: false
+  slack:
+    enabled: false
+  telegram:
+    enabled: false

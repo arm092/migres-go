@@ -1,0 +1,10 @@
+<clickhouse>
+  <listen_host>0.0.0.0</listen_host>
+  <zookeeper><node><host>keeper</host><port>9181</port></node></zookeeper>
+  <macros><replica from_env="REPLICA_NAME"/></macros>
+  <remote_servers><analytics><shard>
+    <internal_replication>true</internal_replication>
+    <replica><host>ch-r1</host><port>9000</port><user>default</user><password>test-only</password></replica>
+    <replica><host>ch-r2</host><port>9000</port><user>default</user><password>test-only</password></replica>
+  </shard></analytics></remote_servers>
+</clickhouse>

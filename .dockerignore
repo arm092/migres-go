@@ -1,0 +1,7 @@
+.git
+.ai
+data
+config.yml
+.env
+bin
+*.exe

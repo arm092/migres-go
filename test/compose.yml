@@ -1,0 +1,69 @@
+services:
+  clickhouse-lts:
+    image: clickhouse/clickhouse-server:26.8
+    profiles: [matrix]
+    environment:
+      CLICKHOUSE_DB: migres_dst
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: test-only
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: '1'
+    ports: ['127.0.0.1:39008:9000']
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8123/ping']
+      interval: 3s
+      timeout: 3s
+      retries: 60
+  mysql57:
+    image: mysql:5.7
+    profiles: [matrix]
+    environment:
+      MYSQL_ROOT_PASSWORD: test-only
+      MYSQL_ROOT_HOST: '%'
+      MYSQL_DATABASE: migres_src
+    ports: ['127.0.0.1:33057:3306']
+    command: ['--server-id=57', '--log-bin=mysql-bin', '--binlog-format=ROW', '--binlog-row-image=FULL']
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-ptest-only']
+      interval: 3s
+      timeout: 3s
+      retries: 60
+  mysql84:
+    image: mysql:8.4
+    profiles: [matrix]
+    environment:
+      MYSQL_ROOT_PASSWORD: test-only
+      MYSQL_ROOT_HOST: '%'
+      MYSQL_DATABASE: migres_src
+    ports: ['127.0.0.1:33084:3306']
+    command: ['--server-id=84', '--log-bin=mysql-bin', '--binlog-format=ROW', '--binlog-row-image=FULL', '--gtid-mode=ON', '--enforce-gtid-consistency=ON']
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-ptest-only']
+      interval: 3s
+      timeout: 3s
+      retries: 60
+  mysql:
+    image: ${MYSQL_IMAGE:-mysql:8.0}
+    environment:
+      MYSQL_ROOT_PASSWORD: test-only
+      MYSQL_ROOT_HOST: '%'
+      MYSQL_DATABASE: migres_src
+    ports: ['127.0.0.1:33080:3306']
+    command: ['--server-id=1', '--log-bin=mysql-bin', '--binlog-format=ROW', '--binlog-row-image=FULL', '--gtid-mode=${MYSQL_GTID_MODE:-ON}', '--enforce-gtid-consistency=${MYSQL_GTID_MODE:-ON}']
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-ptest-only']
+      interval: 3s
+      timeout: 3s
+      retries: 60
+  clickhouse:
+    image: ${CLICKHOUSE_IMAGE:-clickhouse/clickhouse-server:24.8}
+    environment:
+      CLICKHOUSE_DB: migres_dst
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: test-only
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: '1'
+    ports: ['127.0.0.1:39000:9000', '127.0.0.1:38123:8123']
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8123/ping']
+      interval: 3s
+      timeout: 3s
+      retries: 60
