@@ -1,4 +1,9 @@
 name: CI
+permissions:
+  contents: read
+concurrency:
+  group: migres-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 on:
   push:
     branches: [master, 'tasks/**']
@@ -51,7 +56,7 @@ jobs:
           go-version: '1.26.9'
       - run: docker compose -p migres-go-test -f test/compose.yml up -d --wait mysql
       - run: docker compose -p migres-go-replicated -f test/replicated.yml up -d --wait
-      - run: go test ./test -run 'TestReplicated|TestReplicaLoss' -v -count=1 -timeout=10m
+      - run: go test ./test -run 'TestReplicated|TestReplicaLoss|TestCompoundAlter' -v -count=1 -timeout=10m
         env:
           MIGRES_INTEGRATION: '1'
           MIGRES_REPLICATED: '1'

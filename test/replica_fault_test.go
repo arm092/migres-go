@@ -43,7 +43,7 @@ func TestReplicaLossQuorumAndFailover(t *testing.T) {
 		return nil
 	}
 	defer func() {
-		if e := fixture("start", "--wait", "ch-r2"); e != nil {
+		if e := fixture("up", "-d", "--wait", "ch-r2"); e != nil {
 			t.Error(e)
 		}
 		if e := a.Sink.DropOwned(context.Background(), s); e != nil {
@@ -77,7 +77,7 @@ func TestReplicaLossQuorumAndFailover(t *testing.T) {
 	if err = single.Execute(ctx, other); err != nil {
 		t.Fatal(err)
 	}
-	if err = fixture("start", "--wait", "ch-r2"); err != nil {
+	if err = fixture("up", "-d", "--wait", "ch-r2"); err != nil {
 		t.Fatal(err)
 	}
 	wait(t, ctx, func() bool { return a.Sink.Execute(ctx, task) == nil })

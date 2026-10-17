@@ -376,7 +376,19 @@ func (a *App) validateRequest(ctx context.Context, r Request) error {
 		if pipeline.Reached(target, cp) && (r.File != cp.File || r.Pos != cp.Pos) && !r.AllowGap {
 			return fmt.Errorf("forward reposition requires --allow-gap")
 		}
+		if pipeline.Reached(target, cp) && (target.File != cp.File || target.Pos != cp.Pos) {
+			if err := a.validateForwardSchema(ctx, cp, target); err != nil {
+				return err
+			}
+		}
 		if r.File == cp.File && r.Pos == cp.Pos {
+			return nil
+		}
+		currentEnd, err := a.Source.Position(ctx)
+		if err != nil {
+			return err
+		}
+		if r.File == currentEnd.File && r.Pos == currentEnd.Pos {
 			return nil
 		}
 		rows, err := a.Source.DB.QueryContext(ctx, "SHOW BINLOG EVENTS IN "+schema.Literal(r.File)+" FROM "+fmt.Sprint(r.Pos)+" LIMIT 1")
