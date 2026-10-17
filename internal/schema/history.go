@@ -237,6 +237,9 @@ func Apply(old model.Schema, sql string, c config.Config) (model.Schema, bool, e
 				}
 				for j, k := range s.Keys {
 					if k == name {
+						if len(c.MySQL.Keys[s.Table]) > 0 && col.Nullable {
+							return s, false, fmt.Errorf("configured identity columns must remain explicitly NOT NULL")
+						}
 						s.Keys[j] = col.Name
 						col.Nullable = false
 						col.CHType, e = Type(col.MySQLType, false, c.Migration.Timezone, c.Migration.LowCardinality)
@@ -269,14 +272,32 @@ func Apply(old model.Schema, sql string, c config.Config) (model.Schema, bool, e
 		case ast.AlterTableRenameTable:
 			s.Table = spec.NewTable.Name.O
 			rebuild = true
-		case ast.AlterTableDropIndex, ast.AlterTableDropForeignKey, ast.AlterTableRenameIndex, ast.AlterTableLock, ast.AlterTableAlgorithm, ast.AlterTableOption:
+		case ast.AlterTableDropIndex:
+			if len(c.MySQL.Keys[s.Table]) > 0 {
+				return s, false, fmt.Errorf("dropping indexes with a configured identity requires key revalidation and resnapshot")
+			}
+		case ast.AlterTableDropForeignKey, ast.AlterTableRenameIndex, ast.AlterTableLock, ast.AlterTableAlgorithm, ast.AlterTableOption:
 		// No stored row shape change. Explicit key constraints are revalidated on rebuild.
 		default:
 			return s, false, fmt.Errorf("unsupported ALTER operation %d", spec.Tp)
 		}
 	}
+	if custom := c.MySQL.Keys[s.Table]; len(custom) > 0 {
+		s.Keys = slices.Clone(custom)
+	}
 	if len(s.Keys) == 0 {
 		return s, false, fmt.Errorf("DDL removes unique identity; configure a replacement key and resnapshot")
+	}
+	for _, key := range s.Keys {
+		i := index(key)
+		if i < 0 {
+			return s, false, fmt.Errorf("DDL removes configured identity column %s", key)
+		}
+		s.Columns[i].Nullable = false
+		s.Columns[i].CHType, err = Type(s.Columns[i].MySQLType, false, c.Migration.Timezone, c.Migration.LowCardinality)
+		if err != nil {
+			return s, false, err
+		}
 	}
 	return s, rebuild, nil
 }

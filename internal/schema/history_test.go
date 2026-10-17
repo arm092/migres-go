@@ -39,3 +39,25 @@ func TestCustomKeyRequiresConstraint(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestKeyChangesPreserveEnforcedIdentity(t *testing.T) {
+	c := config.Default()
+	s, err := FromCreate("CREATE TABLE t(id BIGINT PRIMARY KEY, replacement BIGINT)", "db", "gen", c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, rebuild, err := Apply(s, "ALTER TABLE t DROP PRIMARY KEY, ADD PRIMARY KEY(replacement)", c)
+	if err != nil || !rebuild || len(next.Keys) != 1 || next.Keys[0] != "replacement" || next.Columns[1].Nullable || next.Columns[1].CHType != "Int64" {
+		t.Fatalf("new PK was not normalized: %+v %v", next, err)
+	}
+	c.MySQL.Keys["t"] = []string{"id"}
+	for _, query := range []string{"ALTER TABLE t DROP INDEX selected_unique", "ALTER TABLE t MODIFY COLUMN id BIGINT NULL", "ALTER TABLE t DROP COLUMN id"} {
+		if _, _, err = Apply(s, query, c); err == nil {
+			t.Fatalf("unsafe identity change accepted: %s", query)
+		}
+	}
+	next, _, err = Apply(s, "ALTER TABLE t DROP PRIMARY KEY, ADD PRIMARY KEY(replacement)", c)
+	if err != nil || next.Keys[0] != "id" {
+		t.Fatalf("configured identity changed: %+v %v", next, err)
+	}
+}
