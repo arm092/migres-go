@@ -148,3 +148,27 @@ func TestStagingLimitFailureIsAtomic(t *testing.T) {
 		t.Fatal("partial staging survived", st, err)
 	}
 }
+
+func TestCutoverKeepsItsCoordinatorUntilAcknowledgement(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "journal.db"), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	p := model.Position{File: "mysql-bin.000001", Pos: 100}
+	if err = s.Append([]model.Event{{Kind: "ddl", Position: p}}, p); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := s.Events(1)
+	if err = s.Transform(events[0].Sequence, []model.Task{{Kind: "ddl", Table: "t", Position: p}, {Kind: "insert", Table: "t", Position: p}, {Kind: "ddl", Table: "t", Position: p, Operation: "next-copy"}}); err != nil {
+		t.Fatal(err)
+	}
+	tasks, _ := s.Tasks(10)
+	if err = s.RetireTableTasks("t", p, tasks[0].Token); err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := s.Tasks(10)
+	if err != nil || len(remaining) != 2 || remaining[0].ID != tasks[0].ID || remaining[1].Operation != "next-copy" {
+		t.Fatal("coordinator lost before durable completion", remaining, err)
+	}
+}

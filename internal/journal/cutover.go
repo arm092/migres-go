@@ -27,7 +27,9 @@ func (s *Store) RetireTableTasks(table string, boundary model.Position, operatio
 			if err := json.Unmarshal(v, &t); err != nil {
 				return err
 			}
-			if t.Table == table && positionLE(t.Position, boundary) {
+			// The coordinator must remain replayable until its state and operation
+			// completion are durable. Consumer acknowledges it afterward.
+			if t.Table == table && t.Token != operation && t.Operation == "" && positionLE(t.Position, boundary) {
 				if err := archive.Put([]byte(fmt.Sprintf("cutover/%s/%x", operation, k)), v); err != nil {
 					return err
 				}
