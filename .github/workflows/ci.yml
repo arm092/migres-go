@@ -24,6 +24,11 @@ jobs:
       - run: go test ./test ./internal/app -v -count=1 -timeout=10m
         env:
           MIGRES_INTEGRATION: '1'
+      - run: go test ./internal/app -run '^TestLostLog$' -v -count=1 -timeout=1m
+        env:
+          MIGRES_INTEGRATION: '1'
+          MIGRES_SOURCE_FAULTS: '1'
+      - run: docker run --rm --tmpfs /limited:size=4m -e MIGRES_DISK_FAULT_DIR=/limited -v "$PWD:/src" -w /src golang:1.26.9 go test ./internal/journal -run '^TestDiskFault$' -v -count=1 -timeout=30s
       - if: always()
         run: docker compose -p migres-go-test -f test/compose.yml down -v
   integration:
@@ -56,10 +61,11 @@ jobs:
           go-version: '1.26.9'
       - run: docker compose -p migres-go-test -f test/compose.yml up -d --wait mysql
       - run: docker compose -p migres-go-replicated -f test/replicated.yml up -d --wait
-      - run: go test ./test -run 'TestReplicated|TestReplicaLoss|TestCompoundAlter' -v -count=1 -timeout=10m
+      - run: go test ./test -run 'TestReplicated|TestReplicaLoss|TestCompoundAlter|TestRenameReplay|TestRebuildSupersedingDDL' -v -count=1 -timeout=10m
         env:
           MIGRES_INTEGRATION: '1'
           MIGRES_REPLICATED: '1'
+          MIGRES_LINEAGE_REPLICATED: '1'
           MIGRES_FAULTS: '1'
       - if: always()
         run: |

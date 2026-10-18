@@ -3,6 +3,8 @@ package test
 import (
 	"context"
 	"fmt"
+	"github.com/arm092/migres-go/internal/sink"
+	"os"
 	"testing"
 	"time"
 
@@ -54,4 +56,35 @@ func TestUnsignedEnumSetBinaryJSON(t *testing.T) {
 		err := a.Sink.Conn.QueryRow(ctx, "SELECT id,status,tags,flags,hex(raw),payload FROM `"+name+"` FINAL WHERE _migres_deleted=0").Scan(&id, &status, &tags, &flags, &raw, &payload)
 		return err == nil && id == ^uint64(0) && status == "blue" && tags == "b" && flags == 255 && raw == "00FF01" && payload == `{"x":2}`
 	})
+}
+
+func TestTLSRejectsUnknownCA(t *testing.T) {
+	wrong := os.Getenv("MIGRES_TEST_WRONG_CA")
+	if wrong == "" {
+		t.Skip("requires isolated TLS fixture")
+	}
+	c := testConfig(t)
+	c.MySQL.SSLCA = wrong
+	c.MySQL.SSLDisabled = false
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	m, err := source.Open(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if err = m.Check(ctx); err == nil {
+		t.Fatal("MySQL accepted unknown CA")
+	}
+	c.ClickHouse.CACerts = wrong
+	c.ClickHouse.Secure = true
+	c.ClickHouse.Verify = true
+	target, err := sink.Open(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if err = target.Check(ctx); err == nil {
+		t.Fatal("ClickHouse accepted unknown CA")
+	}
 }

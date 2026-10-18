@@ -265,6 +265,9 @@ func (a *App) Serve(ctx context.Context) error {
 			err = a.applyRequest(ctx, req)
 			if err != nil {
 				op.State = "failed"
+				if pipeline.Transient(err) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					op.State = "applying"
+				}
 				op.Error = err.Error()
 				a.Blocked.Store(true)
 			} else {
@@ -280,7 +283,7 @@ func (a *App) Serve(ctx context.Context) error {
 				continue
 			}
 			msg.reply <- Response{Operation: &op, Error: op.Error}
-			if err == nil {
+			if err == nil || op.State == "applying" {
 				runCtx, stop = context.WithCancel(ctx)
 				go func(run context.Context) { done <- a.Run(run) }(runCtx)
 				running = true
@@ -555,6 +558,17 @@ func (a *App) drain(ctx context.Context) error {
 	defer cstop()
 	tdone := make(chan error, 1)
 	cdone := make(chan error, 1)
+	// A rebuild in the backlog may emit signal-table windows and need newer
+	// binlog boundaries. Keep Producer alive until the drain reaches quiescence,
+	// then stop it first and recheck for its final committed handoff.
+	pctx, pstop := context.WithCancel(drainCtx)
+	pdone := make(chan error, 1)
+	startProducer := func() {
+		go func() { pdone <- (&pipeline.Producer{Config: a.Config, Store: a.Store, Source: a.Source}).Run(pctx) }()
+	}
+	startProducer()
+	defer pstop()
+	pe := false
 	go func() {
 		tdone <- (&pipeline.Transformer{Store: a.Store, Poll: a.Config.Migration.CDC.TransformerPoll}).Run(tctx)
 	}()
@@ -571,9 +585,30 @@ loop:
 			break
 		}
 		if st.Events == 0 && st.Tasks == 0 {
-			break
+			pstop()
+			producerErr := <-pdone
+			pe = true
+			if producerErr != nil {
+				result = producerErr
+				break
+			}
+			st, err = a.Store.Stats()
+			if err != nil {
+				result = err
+				break
+			}
+			if st.Events == 0 && st.Tasks == 0 {
+				break
+			}
+			pctx, pstop = context.WithCancel(drainCtx)
+			pe = false
+			startProducer()
 		}
 		select {
+		case err = <-pdone:
+			pe = true
+			result = err
+			break loop
 		case err = <-tdone:
 			te = true
 			result = err
@@ -587,6 +622,10 @@ loop:
 			break loop
 		case <-time.After(20 * time.Millisecond):
 		}
+	}
+	pstop()
+	if !pe {
+		<-pdone
 	}
 	tstop()
 	cstop()

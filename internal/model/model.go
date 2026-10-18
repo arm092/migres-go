@@ -68,14 +68,15 @@ func (v Value) SQL() any {
 }
 
 type Column struct {
-	Charset   string   `json:"charset,omitempty"`
-	Elements  []string `json:"elements,omitempty"`
-	Name      string   `json:"name"`
-	MySQLType string   `json:"mysql_type"`
-	CHType    string   `json:"ch_type"`
-	Nullable  bool     `json:"nullable"`
-	Default   *string  `json:"default,omitempty"`
-	Generated bool     `json:"generated,omitempty"`
+	DefaultExpression bool     `json:"default_expression,omitempty"`
+	Charset           string   `json:"charset,omitempty"`
+	Elements          []string `json:"elements,omitempty"`
+	Name              string   `json:"name"`
+	MySQLType         string   `json:"mysql_type"`
+	CHType            string   `json:"ch_type"`
+	Nullable          bool     `json:"nullable"`
+	Default           *string  `json:"default,omitempty"`
+	Generated         bool     `json:"generated,omitempty"`
 }
 type Schema struct {
 	Charset    string   `json:"charset,omitempty"`

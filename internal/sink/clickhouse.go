@@ -281,12 +281,7 @@ func (c *ClickHouse) DDL(ctx context.Context, t model.Task) error {
 	case "truncate":
 		return c.Conn.Exec(ctx, "TRUNCATE TABLE IF EXISTS "+schema.Ref(c.Config.ClickHouse.Database, t.Table)+cluster+" SYNC")
 	case "rename":
-		for _, pair := range d.Pairs {
-			if err := c.Rename(ctx, pair, cluster); err != nil {
-				return err
-			}
-		}
-		return nil
+		return c.RenameTask(ctx, t, d.Pairs, cluster)
 	case "alter":
 		return c.Alter(ctx, t)
 	default:

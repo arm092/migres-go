@@ -17,6 +17,10 @@ func (a *App) recoverOperations(ctx context.Context) error {
 		}
 		req := Request{Command: op.Kind, File: op.Position.File, Pos: op.Position.Pos, GTID: op.Position.GTID, Discard: op.DiscardPending, AllowGap: op.AllowGap, Table: op.Table, ID: op.ID}
 		if err = a.applyRequest(ctx, req); err != nil {
+			op.Error = err.Error()
+			if saveErr := a.Store.Operation(op); saveErr != nil {
+				return saveErr
+			}
 			return err
 		}
 		op.State = "done"

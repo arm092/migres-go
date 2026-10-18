@@ -3,6 +3,8 @@ package test
 import (
 	"context"
 	"fmt"
+	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -185,4 +187,136 @@ func TestRebuildCapacityRecovery(t *testing.T) {
 		e := a.Sink.Conn.QueryRow(ctx, "SELECT value FROM `"+name+"` FINAL WHERE _migres_deleted=0").Scan(&value)
 		return a.Ready.Load() && e == nil && value == 5000000000
 	})
+}
+
+// A DDL backlog may move or drop a source before Consumer reaches its rebuild.
+// Reopening must converge without publishing stale row tasks from old names.
+func TestRebuildSupersedingDDL(t *testing.T) {
+	for _, kind := range []string{"rename", "drop", "reuse", "multi_drop", "swap"} {
+		t.Run(kind, func(t *testing.T) {
+			c := testConfig(t)
+			if os.Getenv("MIGRES_LINEAGE_REPLICATED") == "1" {
+				c.ClickHouse.Engine = "ReplicatedReplacingMergeTree"
+				c.ClickHouse.Cluster = "analytics"
+				c.ClickHouse.Addresses = []string{net.JoinHostPort(c.ClickHouse.Host, "39001"), net.JoinHostPort(c.ClickHouse.Host, "39002")}
+			}
+			name := fmt.Sprintf("supersede_%d", time.Now().UnixNano())
+			renamed := name + "_new"
+			c.MySQL.Include = []string{name}
+			if kind == "multi_drop" || kind == "swap" {
+				c.MySQL.Include = append(c.MySQL.Include, name+"c")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+			defer cancel()
+			m, err := source.Open(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			exec := func(q string) {
+				t.Helper()
+				if _, e := m.DB.ExecContext(ctx, q); e != nil {
+					t.Fatal(e)
+				}
+			}
+			exec("CREATE TABLE `" + name + "`(id BIGINT PRIMARY KEY,value INT NOT NULL)")
+			defer m.DB.Exec("DROP TABLE IF EXISTS `" + name + "`,`" + renamed + "`")
+			exec("INSERT INTO `" + name + "` VALUES(1,10)")
+			func() {
+				a, e := app.Open(c)
+				if e != nil {
+					t.Fatal(e)
+				}
+				defer a.Close()
+				run, stop := context.WithCancel(ctx)
+				done := make(chan error, 1)
+				go func() { done <- a.Run(run) }()
+				defer func() {
+					stop()
+					if e := <-done; e != nil {
+						t.Error(e)
+					}
+				}()
+				wait(t, ctx, func() bool { return a.Ready.Load() })
+			}()
+			exec("ALTER TABLE `" + name + "` MODIFY value BIGINT NOT NULL")
+			exec("UPDATE `" + name + "` SET value=5000000000")
+			if kind == "rename" || kind == "reuse" {
+				exec("RENAME TABLE `" + name + "` TO `" + renamed + "`")
+				exec("UPDATE `" + renamed + "` SET id=2,value=6000000000")
+				if kind == "reuse" {
+					exec("CREATE TABLE `" + name + "`(id BIGINT PRIMARY KEY,value BIGINT NOT NULL)")
+					exec("INSERT INTO `" + name + "` VALUES(100,7)")
+				}
+
+			} else if kind == "swap" {
+				extra := name + "c"
+				temp := name + "tmp"
+				exec("CREATE TABLE `" + extra + "`(id BIGINT PRIMARY KEY,value BIGINT NOT NULL)")
+				exec("INSERT INTO `" + extra + "` VALUES(99,9)")
+				defer m.DB.Exec("DROP TABLE IF EXISTS `" + extra + "`,`" + temp + "`")
+				exec("RENAME TABLE `" + name + "` TO `" + temp + "`,`" + extra + "` TO `" + name + "`,`" + temp + "` TO `" + extra + "`")
+			} else if kind == "multi_drop" {
+				extra := name + "c"
+				moved := name + "d"
+				exec("CREATE TABLE `" + extra + "`(id INT PRIMARY KEY)")
+				exec("INSERT INTO `" + extra + "` VALUES(7)")
+				defer m.DB.Exec("DROP TABLE IF EXISTS `" + extra + "`,`" + moved + "`")
+				exec("RENAME TABLE `" + name + "` TO `" + renamed + "`,`" + extra + "` TO `" + moved + "`")
+				exec("DROP TABLE `" + renamed + "`")
+			} else {
+				exec("DROP TABLE `" + name + "`")
+			}
+			a, err := app.Open(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer a.Close()
+			run, stop := context.WithCancel(ctx)
+			done := make(chan error, 1)
+			go func() { done <- a.Run(run) }()
+			defer func() {
+				stop()
+				if e := <-done; e != nil {
+					t.Error(e)
+				}
+			}()
+			wait(t, ctx, func() bool {
+				stats, e := a.Store.Stats()
+				if e != nil || stats.Tasks != 0 || stats.Events != 0 {
+					return false
+				}
+				var count uint64
+				if kind == "drop" || kind == "multi_drop" {
+					e = a.Sink.Conn.QueryRow(ctx, "SELECT count() FROM system.tables WHERE database=? AND name=?", c.ClickHouse.Database, name).Scan(&count)
+					if e != nil || count != 0 {
+						return false
+					}
+					if kind == "multi_drop" {
+						e = a.Sink.Conn.QueryRow(ctx, "SELECT count() FROM `"+name+"d` FINAL WHERE _migres_deleted=0 AND id=7").Scan(&count)
+						return e == nil && count == 1
+					}
+					return true
+				}
+				var id, value int64
+				if kind == "swap" {
+					e = a.Sink.Conn.QueryRow(ctx, "SELECT count(),max(id),max(value) FROM `"+name+"c` FINAL WHERE _migres_deleted=0").Scan(&count, &id, &value)
+					if e != nil || count != 1 || id != 1 || value != 5000000000 {
+						return false
+					}
+					e = a.Sink.Conn.QueryRow(ctx, "SELECT count(),max(id),max(value) FROM `"+name+"` FINAL WHERE _migres_deleted=0").Scan(&count, &id, &value)
+					return e == nil && count == 1 && id == 99 && value == 9
+				}
+				e = a.Sink.Conn.QueryRow(ctx, "SELECT count(),max(id),max(value) FROM `"+renamed+"` FINAL WHERE _migres_deleted=0").Scan(&count, &id, &value)
+				if e != nil || count != 1 || id != 2 || value != 6000000000 {
+					return false
+				}
+				if kind == "reuse" {
+					e = a.Sink.Conn.QueryRow(ctx, "SELECT count(),max(id),max(value) FROM `"+name+"` FINAL WHERE _migres_deleted=0").Scan(&count, &id, &value)
+					return e == nil && count == 1 && id == 100 && value == 7
+				}
+				return true
+			})
+		})
+	}
 }

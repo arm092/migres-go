@@ -44,9 +44,13 @@ func column(def *ast.ColumnDef, c config.Config, defaultCharset string) (model.C
 		case ast.ColumnOptionNotNull, ast.ColumnOptionPrimaryKey:
 			out.Nullable = false
 		case ast.ColumnOptionDefaultValue:
-			if v, ok := o.Expr.(ast.ValueExpr); ok && v.GetValue() != nil {
-				x := fmt.Sprint(v.GetValue())
-				out.Default = &x
+			if v, ok := o.Expr.(ast.ValueExpr); ok {
+				if v.GetValue() != nil {
+					x := fmt.Sprint(v.GetValue())
+					out.Default = &x
+				}
+			} else {
+				out.DefaultExpression = true
 			}
 		case ast.ColumnOptionGenerated:
 			out.Generated = true
@@ -229,6 +233,9 @@ func Apply(old model.Schema, sql string, c config.Config) (model.Schema, bool, e
 				col, e := column(def, c, s.Charset)
 				if e != nil {
 					return s, false, e
+				}
+				if col.DefaultExpression || col.Generated {
+					rebuild = true
 				}
 				if index(col.Name) >= 0 {
 					continue

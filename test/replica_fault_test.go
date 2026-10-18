@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"testing"
@@ -19,7 +20,7 @@ func TestReplicaLossQuorumAndFailover(t *testing.T) {
 		t.Skip("opt-in: stops only ch-r2 in migres-go-replicated fixture")
 	}
 	c := testConfig(t)
-	c.ClickHouse.Addresses = []string{"127.0.0.1:39001", "127.0.0.1:39002"}
+	c.ClickHouse.Addresses = []string{net.JoinHostPort(c.ClickHouse.Host, "39001"), net.JoinHostPort(c.ClickHouse.Host, "39002")}
 	c.ClickHouse.Engine = "ReplicatedReplacingMergeTree"
 	c.ClickHouse.Cluster = "analytics"
 	c.ClickHouse.WriteAck.Timeout = 2 * time.Second
@@ -62,7 +63,7 @@ func TestReplicaLossQuorumAndFailover(t *testing.T) {
 	}
 	singleConfig := c
 	singleConfig.ClickHouse.WriteAck.Mode = "single"
-	singleConfig.ClickHouse.Addresses = []string{"127.0.0.1:39002", "127.0.0.1:39001"}
+	singleConfig.ClickHouse.Addresses = []string{net.JoinHostPort(c.ClickHouse.Host, "39002"), net.JoinHostPort(c.ClickHouse.Host, "39001")}
 	single, err := sink.Open(singleConfig)
 	if err != nil {
 		t.Fatal(err)

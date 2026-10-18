@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/arm092/migres-go/internal/journal"
@@ -14,13 +16,15 @@ import (
 )
 
 type rebuildState struct {
-	Schema   model.Schema
-	Previous model.Schema
-	Shadow   model.Schema
-	LastKey  []model.Value
-	Start    model.Position
-	Boundary model.Position
-	Step     string
+	SourceTable string
+	Windows     []journal.TableWindow
+	Schema      model.Schema
+	Previous    model.Schema
+	Shadow      model.Schema
+	LastKey     []model.Value
+	Start       model.Position
+	Boundary    model.Position
+	Step        string
 }
 
 func (a *App) Execute(ctx context.Context, t model.Task) error {
@@ -67,14 +71,34 @@ func (a *App) rebuild(ctx context.Context, t model.Task) error {
 	a.Ready.Store(false)
 	meta := "rebuild:" + t.Token
 	var state rebuildState
-	if err := a.Store.Meta(meta, &state); err != nil {
-		actual, err := a.Source.Schema(ctx, t.Table)
+	err := a.Store.Meta(meta, &state)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err == nil && state.Step == "done" {
+		return a.finishRebuild()
+	}
+	line := rebuildLineage{Table: state.SourceTable, Windows: state.Windows}
+	if state.Step != "exchange" && state.Step != "retire" {
+		line, err = a.rebuildLineage(ctx, t)
+	}
+	if err != nil {
+		return err
+	}
+	if line.Drop != nil {
+		return a.abandonDroppedRebuild(ctx, t, line, state, meta)
+	}
+	if state.Step != "" && state.Step != "exchange" && state.Step != "retire" && state.SourceTable != line.Table {
+		return a.restartRebuild(ctx, t, state, meta)
+	}
+	if state.Step == "" {
+		actual, err := a.Source.Schema(ctx, line.Table)
 		if err != nil {
 			return err
 		}
 		actual.Generation = journal.ID()
 		actual.Revision = t.Schema.Revision
-		state = rebuildState{Schema: actual, Shadow: actual, Previous: *t.Previous, Step: "copy"}
+		state = rebuildState{SourceTable: line.Table, Windows: line.Windows, Schema: actual, Shadow: actual, Previous: *t.Previous, Step: "copy"}
 		owned, err := a.Store.Owned()
 		if err != nil {
 			return err
@@ -110,6 +134,10 @@ func (a *App) rebuild(ctx context.Context, t model.Task) error {
 		for {
 			rows, err := a.Source.Chunk(ctx, state.Schema, state.LastKey, a.Config.Migration.BatchRows)
 			if err != nil {
+				latest, e := a.rebuildLineage(ctx, t)
+				if e == nil && (latest.Drop != nil || latest.Table != state.SourceTable) {
+					return schema.ErrSnapshotInvalidated
+				}
 				return err
 			}
 			if len(rows) == 0 {
@@ -179,7 +207,7 @@ func (a *App) rebuild(ctx context.Context, t model.Task) error {
 				return err
 			}
 			for _, name := range ddl.Tables {
-				if name == t.Table {
+				if journal.InTableWindows(state.Windows, name, event.Position) {
 					return a.restartRebuild(ctx, t, state, meta)
 				}
 			}
@@ -190,7 +218,7 @@ func (a *App) rebuild(ctx context.Context, t model.Task) error {
 		}
 		// A changed shape invalidates the copy; retrying the source DDL after recovery
 		// must never publish a partially converted generation.
-		current, err := a.Source.Schema(ctx, t.Table)
+		current, err := a.Source.Schema(ctx, state.SourceTable)
 		if err != nil {
 			return err
 		}
@@ -231,7 +259,7 @@ func (a *App) rebuild(ctx context.Context, t model.Task) error {
 				if after > upper {
 					break
 				}
-				if pending.Table != t.Table || pending.Kind != "insert" || pending.Schema == nil || shape(*pending.Schema) != shape(state.Schema) {
+				if !journal.InTableWindows(state.Windows, pending.Table, pending.Position) || pending.Kind != "insert" || pending.Schema == nil || shape(*pending.Schema) != shape(state.Schema) {
 					continue
 				}
 				rows := []model.Row{}
@@ -268,7 +296,7 @@ func (a *App) rebuild(ctx context.Context, t model.Task) error {
 		}
 	}
 	if state.Step == "retire" {
-		if err := a.Store.RetireTableTasks(t.Table, state.Boundary, t.Token); err != nil {
+		if err := a.Store.RetireRebuildTasks(state.Windows, state.Boundary, t.Token, true); err != nil {
 			return err
 		}
 		state.Step = "done"
@@ -278,6 +306,9 @@ func (a *App) rebuild(ctx context.Context, t model.Task) error {
 	}
 	// Future source events use the source schema, but target table ownership is the
 	// published generation and is deliberately tracked separately.
+	return a.finishRebuild()
+}
+func (a *App) finishRebuild() error {
 	var snapshotDone bool
 	a.Store.Meta("snapshot_done", &snapshotDone)
 	if snapshotDone {
@@ -293,19 +324,26 @@ func (a *App) restartRebuild(ctx context.Context, t model.Task, old rebuildState
 	if err := a.Sink.DropOwned(ctx, old.Shadow); err != nil {
 		return err
 	}
-	actual, err := a.Source.Schema(ctx, t.Table)
+	line, err := a.rebuildLineage(ctx, t)
+	if err != nil {
+		return err
+	}
+	if line.Drop != nil {
+		return schema.ErrSnapshotInvalidated
+	}
+	actual, err := a.Source.Schema(ctx, line.Table)
 	if err != nil {
 		return err
 	}
 	actual.Generation = journal.ID()
-	if current, err := a.Store.Schema(t.Table); err == nil {
+	if current, err := a.Store.Schema(line.Table); err == nil {
 		actual.Revision = current.Revision
 	}
 	start, err := a.Source.Position(ctx)
 	if err != nil {
 		return err
 	}
-	next := rebuildState{Schema: actual, Previous: old.Previous, Shadow: actual, Start: start, Step: "copy"}
+	next := rebuildState{SourceTable: line.Table, Windows: line.Windows, Schema: actual, Previous: old.Previous, Shadow: actual, Start: start, Step: "copy"}
 	next.Shadow.Table = "_migres_build_" + actual.Generation
 	if err = a.Store.SetMeta(meta, next); err != nil {
 		return err

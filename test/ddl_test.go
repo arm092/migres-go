@@ -73,3 +73,51 @@ func TestDDLAndHistoricalSchema(t *testing.T) {
 		return err == nil && n == 0
 	})
 }
+
+func TestDefaultExpressionBackfill(t *testing.T) {
+	c := testConfig(t)
+	c.Migration.Timezone = "Asia/Yerevan"
+	name := fmt.Sprintf("defexpr_%d", time.Now().UnixNano())
+	c.MySQL.Include = []string{name}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	m, err := source.Open(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if _, err = m.DB.ExecContext(ctx, "CREATE TABLE `"+name+"`(id INT PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	defer m.DB.Exec("DROP TABLE IF EXISTS `" + name + "`")
+	if _, err = m.DB.ExecContext(ctx, "INSERT INTO `"+name+"` VALUES(1)"); err != nil {
+		t.Fatal(err)
+	}
+	a, err := app.Open(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	run, stop := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- a.Run(run) }()
+	defer func() {
+		stop()
+		if e := <-done; e != nil {
+			t.Error(e)
+		}
+	}()
+	wait(t, ctx, func() bool { return a.Ready.Load() })
+	if _, err = m.DB.ExecContext(ctx, "ALTER TABLE `"+name+"` ADD COLUMN stamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"); err != nil {
+		t.Fatal(err)
+	}
+	var expected uint32
+	if err = m.DB.QueryRowContext(ctx, "SELECT UNIX_TIMESTAMP(stamp) FROM `"+name+"` WHERE id=1").Scan(&expected); err != nil {
+		t.Fatal(err)
+	}
+	wait(t, ctx, func() bool {
+		var actual uint32
+		err := a.Sink.Conn.QueryRow(ctx, "SELECT toUnixTimestamp(stamp) FROM `"+name+"` FINAL WHERE _migres_deleted=0 AND id=1").Scan(&actual)
+		return err == nil && expected == actual
+	})
+}

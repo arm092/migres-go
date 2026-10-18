@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ func TestReplicatedQuorumAndRebuild(t *testing.T) {
 	}
 	c := testConfig(t)
 	c.ClickHouse.Port = 39001
-	c.ClickHouse.Addresses = []string{"127.0.0.1:39001", "127.0.0.1:39002"}
+	c.ClickHouse.Addresses = []string{net.JoinHostPort(c.ClickHouse.Host, "39001"), net.JoinHostPort(c.ClickHouse.Host, "39002")}
 	c.ClickHouse.Engine = "ReplicatedReplacingMergeTree"
 	c.ClickHouse.Cluster = "analytics"
 	name := fmt.Sprintf("replicated_%d", time.Now().UnixNano())
@@ -83,7 +84,7 @@ func TestReplicatedDropRecoveryAndOwnership(t *testing.T) {
 		t.Skip("requires replicated fixture")
 	}
 	c := testConfig(t)
-	c.ClickHouse.Addresses = []string{"127.0.0.1:39001", "127.0.0.1:39002"}
+	c.ClickHouse.Addresses = []string{net.JoinHostPort(c.ClickHouse.Host, "39001"), net.JoinHostPort(c.ClickHouse.Host, "39002")}
 	c.ClickHouse.Engine = "ReplicatedReplacingMergeTree"
 	c.ClickHouse.Cluster = "analytics"
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

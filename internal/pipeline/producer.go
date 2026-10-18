@@ -347,20 +347,42 @@ func (p *Producer) Run(ctx context.Context) error {
 				}
 				save = append(save, fresh)
 			case "rename":
+				current, e := p.Store.Schemas()
+				if e != nil {
+					return e
+				}
+				byName := map[string]model.Schema{}
+				for _, sc := range current {
+					byName[sc.Table] = sc
+				}
+				touched := map[string]bool{}
+				var targetPairs []string
 				for _, pair := range d.Pairs {
-					if !p.tracked(pair[0]) {
+					old, exists := byName[pair[0]]
+					if !exists {
+						if p.tracked(pair[0]) {
+							return fmt.Errorf("missing historical rename source %s", pair[0])
+						}
 						continue
 					}
-					old, e := p.Store.Schema(pair[0])
-					if e != nil {
-						return e
+					if len(targetPairs) == 0 {
+						event.Table = pair[0]
 					}
-					fresh := old
-					fresh.Table = pair[1]
-					fresh.Revision = event.SourceID
-					save = append(save, fresh)
-					remove = append(remove, pair[0])
+					targetPairs = append(targetPairs, schema.Ref(c.MySQL.Database, pair[0])+" TO "+schema.Ref(c.MySQL.Database, pair[1]))
+					delete(byName, pair[0])
+					old.Table = pair[1]
+					old.Revision = event.SourceID
+					byName[pair[1]] = old
+					touched[pair[0]] = true
+					touched[pair[1]] = true
 				}
+				for name := range touched {
+					remove = append(remove, name)
+					if sc, ok := byName[name]; ok {
+						save = append(save, sc)
+					}
+				}
+				event.Query = "RENAME TABLE " + strings.Join(targetPairs, ",")
 			case "drop":
 				for _, table := range d.Tables {
 					if p.tracked(table) {

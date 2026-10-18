@@ -46,6 +46,15 @@ func testConfig(t *testing.T) config.Config {
 	}
 	c.ClickHouse.Password = "test-only"
 	c.ClickHouse.Database = "migres_dst"
+	if ca := os.Getenv("MIGRES_TEST_MYSQL_CA"); ca != "" {
+		c.MySQL.SSLCA = ca
+		c.MySQL.SSLDisabled = false
+	}
+	if ca := os.Getenv("MIGRES_TEST_CH_CA"); ca != "" {
+		c.ClickHouse.Secure = true
+		c.ClickHouse.Verify = true
+		c.ClickHouse.CACerts = ca
+	}
 	c.DataDir = t.TempDir()
 	c.RuntimeDir = c.DataDir + "/run"
 	c.Listen = "127.0.0.1:0"
@@ -183,5 +192,71 @@ func TestSnapshotCDCAndRestart(t *testing.T) {
 			}
 			return false
 		})
+	}
+}
+
+// Opt-in reproducible fixture baseline; throughput is not a production SLO.
+func TestPerformance(t *testing.T) {
+	if os.Getenv("MIGRES_PERFORMANCE") != "1" {
+		t.Skip("opt-in measured fixture baseline")
+	}
+	c := testConfig(t)
+	c.Migration.Mode = "snapshot"
+	c.Migration.BatchRows = 5000
+	c.Migration.Workers = 2
+	c.Migration.CDC.BatchMaxWait = 20 * time.Millisecond
+	c.Migration.CDC.CheckpointRows = 100
+	name := fmt.Sprintf("perf_%d", time.Now().UnixNano())
+	c.MySQL.Include = []string{name}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	m, err := source.Open(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if _, err = m.DB.ExecContext(ctx, "CREATE TABLE `"+name+"`(id INT PRIMARY KEY,value BIGINT NOT NULL)"); err != nil {
+		t.Fatal(err)
+	}
+	defer m.DB.Exec("DROP TABLE IF EXISTS `" + name + "`")
+	const rows = 20000
+	for base := 0; base < rows; base += 1000 {
+		q := "INSERT INTO `" + name + "` VALUES "
+		args := make([]any, 0, 2000)
+		for i := base; i < base+1000; i++ {
+			if i != base {
+				q += ","
+			}
+			q += "(?,?)"
+			args = append(args, i, int64(i)*17)
+		}
+		if _, err = m.DB.ExecContext(ctx, q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, err := app.Open(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	started := time.Now()
+	if err = a.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(started)
+	var count, bad uint64
+	if err = a.Sink.Conn.QueryRow(ctx, "SELECT count(),countIf(value!=id*17) FROM `"+name+"` FINAL WHERE _migres_deleted=0").Scan(&count, &bad); err != nil || count != rows || bad != 0 {
+		t.Fatalf("%d bad=%d %v", count, bad, err)
+	}
+	stats, err := a.Store.Stats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("snapshot rows=%d elapsed=%s rows_per_second=%.0f journal_bytes=%d snapshot_workers=%d batch_rows=%d", rows, elapsed, float64(rows)/elapsed.Seconds(), stats.JournalBytes, c.Migration.Workers, c.Migration.BatchRows)
+	owned, _ := a.Store.Owned()
+	for _, s := range owned {
+		if err = a.Sink.DropOwned(ctx, s); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

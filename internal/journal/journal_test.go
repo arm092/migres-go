@@ -1,7 +1,10 @@
 package journal
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -170,5 +173,58 @@ func TestCutoverKeepsItsCoordinatorUntilAcknowledgement(t *testing.T) {
 	remaining, err := s.Tasks(10)
 	if err != nil || len(remaining) != 2 || remaining[0].ID != tasks[0].ID || remaining[1].Operation != "next-copy" {
 		t.Fatal("coordinator lost before durable completion", remaining, err)
+	}
+}
+
+// Opt-in tmpfs test: an external writer can exhaust disk after the free-space
+// check. A failed durable append must preserve the last successful checkpoint.
+func TestDiskFault(t *testing.T) {
+	root := os.Getenv("MIGRES_DISK_FAULT_DIR")
+	if root == "" {
+		t.Skip("requires dedicated bounded tmpfs")
+	}
+	dir, err := os.MkdirTemp(root, "migres-disk-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "journal.db")
+	s, err := Open(path, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := model.Position{File: "mysql-bin.000001", Pos: 4}
+	if err = s.Append(nil, last); err != nil {
+		t.Fatal(err)
+	}
+	payload := strings.Repeat("x", 512*1024)
+	failed := false
+	for i := 0; i < 100; i++ {
+		next := last
+		next.Pos++
+		err = s.Append([]model.Event{{Kind: "insert", Table: "t", SourceID: fmt.Sprint(i), Rows: []model.Change{{After: []model.Value{model.Encode(payload)}}}}}, next)
+		if err != nil {
+			failed = true
+			break
+		}
+		last = next
+	}
+	if !failed {
+		t.Fatal("bounded disk did not fill")
+	}
+	t.Logf("expected bounded-disk error: %v", err)
+	s.Close()
+	s, err = Open(path, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var current model.Position
+	if err = s.Meta("checkpoint", &current); err != nil || current != last {
+		t.Fatalf("checkpoint lost: %+v want %+v err=%v", current, last, err)
+	}
+	events, err := s.Events(100)
+	if err != nil || len(events) != int(last.Pos-4) {
+		t.Fatalf("committed events lost %d want %d: %v", len(events), last.Pos-4, err)
 	}
 }

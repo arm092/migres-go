@@ -2,7 +2,9 @@ package sink
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/arm092/migres-go/internal/model"
@@ -101,4 +103,82 @@ func (c *ClickHouse) Rename(ctx context.Context, pair [2]string, cluster string)
 		return err
 	}
 	return c.Store.Disown(pair[0])
+}
+
+// Persist pair identities before the first SQL statement. Names can be reused
+// later in an atomic MySQL swap; retry must never rotate the completed swap again.
+func (c *ClickHouse) RenameTask(ctx context.Context, t model.Task, pairs [][2]string, cluster string) error {
+	if c.Store == nil || t.Token == "" {
+		return fmt.Errorf("rename requires durable task identity")
+	}
+	type step struct {
+		Pair       [2]string
+		Generation string
+	}
+	meta := "renameplan:" + t.Token
+	var plan []step
+	if err := c.Store.Meta(meta, &plan); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		owned, err := c.Store.Owned()
+		if err != nil {
+			return err
+		}
+		byName := map[string]string{}
+		for _, s := range owned {
+			byName[s.Table] = s.Generation
+		}
+		for _, pair := range pairs {
+			gen, ok := byName[pair[0]]
+			if !ok {
+				return fmt.Errorf("rename source is not owned")
+			}
+			if _, exists := byName[pair[1]]; exists {
+				return fmt.Errorf("rename destination already exists in ownership")
+			}
+			plan = append(plan, step{pair, gen})
+			delete(byName, pair[0])
+			byName[pair[1]] = gen
+		}
+		if err = c.Store.SetMeta(meta, plan); err != nil {
+			return err
+		}
+	}
+	for i, st := range plan {
+		marker := fmt.Sprintf("%s:%d", meta, i)
+		var done bool
+		err := c.Store.Meta(marker, &done)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if done {
+			continue
+		}
+		owned, err := c.Store.Owned()
+		if err != nil {
+			return err
+		}
+		found := false
+		for _, s := range owned {
+			if (s.Table == st.Pair[0] || s.Table == st.Pair[1]) && s.Generation == st.Generation {
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("rename pair has no owned generation")
+		}
+		for _, s := range owned {
+			if s.Table == st.Pair[0] && s.Generation != st.Generation {
+				return fmt.Errorf("rename pair generation changed")
+			}
+		}
+		if err = c.Rename(ctx, st.Pair, cluster); err != nil {
+			return err
+		}
+		if err = c.Store.SetMeta(marker, true); err != nil {
+			return err
+		}
+	}
+	return nil
 }
