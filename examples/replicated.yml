@@ -1,0 +1,15 @@
+# Configuration fragment: merge into your full config.yml and adjust endpoints.
+# Requires a real ClickHouse cluster named analytics: one shard, two replicas.
+clickhouse:
+  addresses: [ch-replica-1.internal:9000, ch-replica-2.internal:9000]
+  user: migres
+  database: analytics
+  engine: ReplicatedReplacingMergeTree
+  cluster: analytics
+  replication:
+    path_prefix: /migres/tables
+    replica_macro: replica
+  write_ack:
+    mode: quorum
+    quorum: auto
+    timeout: 30s

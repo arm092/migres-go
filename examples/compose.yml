@@ -1,0 +1,63 @@
+name: migres-demo
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: demo-only-root
+      MYSQL_DATABASE: shop
+    command:
+      - --server-id=101
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+    volumes:
+      - demo-mysql:/var/lib/mysql
+      - ./mysql-init.sql:/docker-entrypoint-initdb.d/001-migres.sql:ro
+    healthcheck:
+      test: [CMD, mysql, --protocol=TCP, -h127.0.0.1, -uroot, -pdemo-only-root, -Dshop, -e, 'SELECT 1']
+      interval: 3s
+      timeout: 3s
+      retries: 60
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.8
+    environment:
+      CLICKHOUSE_DB: analytics
+      CLICKHOUSE_USER: migres
+      CLICKHOUSE_PASSWORD: demo-only-clickhouse
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: '1'
+    volumes:
+      - demo-clickhouse:/var/lib/clickhouse
+    healthcheck:
+      test: [CMD, wget, -qO-, 'http://127.0.0.1:8123/ping']
+      interval: 3s
+      timeout: 3s
+      retries: 60
+
+  migres:
+    build:
+      context: ..
+    image: migres-go:demo
+    restart: unless-stopped
+    stop_grace_period: 90s
+    depends_on:
+      mysql:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      MYSQL_PASSWORD: demo-only-mysql
+      CLICKHOUSE_PASSWORD: demo-only-clickhouse
+    volumes:
+      - ./demo.yml:/app/config.yml:ro
+      - demo-state:/app/data
+    ports:
+      - 127.0.0.1:18080:8080
+
+volumes:
+  demo-mysql:
+  demo-clickhouse:
+  demo-state:

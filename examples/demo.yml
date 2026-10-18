@@ -1,0 +1,26 @@
+# Public local-demo credentials are supplied by Compose, not used in production.
+mysql:
+  host: mysql
+  port: 3306
+  user: migres
+  database: shop
+  include_tables: [orders]
+clickhouse:
+  host: clickhouse
+  port: 9000
+  user: migres
+  database: analytics
+  engine: ReplacingMergeTree
+migration:
+  mode: cdc
+  low_cardinality_strings: true
+  snapshot_mode: auto
+  cdc:
+    server_id: 102
+    snapshot_before: true
+    use_gtid: true
+environment: demo
+data_dir: /app/data
+runtime_dir: /app/data/run
+listen: 0.0.0.0:8080
+shutdown_timeout: 60s

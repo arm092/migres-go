@@ -1,114 +1,112 @@
 # Migres Go
 
-MySQL to ClickHouse change data capture, with an initial online copy and a durable three-stage pipeline.
+**Keep ClickHouse in sync with MySQL using an online snapshot and continuous binlog replication.**
+
+[![CI](https://github.com/arm092/migres-go/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/arm092/migres-go/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/badge/Go-1.26.9-00ADD8?logo=go&logoColor=white)](go.mod)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%99%A5-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/arm092)
+
+Migres Go copies existing rows, streams committed changes, and resumes from durable state after a restart. It is intended for analytical replicas, reporting databases, and moving MySQL workloads into ClickHouse.
 
 ```text
-MySQL → Producer → durable events → Transformer → durable tasks → Consumer → ClickHouse
+MySQL -> Producer -> durable events -> Transformer -> durable tasks -> Consumer -> ClickHouse
 ```
 
-The Producer reads committed binlog transactions. The Transformer creates versioned rows and schema operations. The Consumer delivers tasks, preserving table order and enforcing DDL barriers. Both queues, checkpoints, snapshot progress, ownership and recovery operations live in one bbolt journal on a persistent disk.
+**Project status:** early implementation with integration and fault recovery coverage. Production storage fencing, a completed continuous 24-hour acceptance run, and validation against your workload are release gates. See [verification](docs/verification.md) and the [roadmap](ROADMAP.md).
 
-## Build and configure
+## Features
 
-Requires Go 1.26.9 or newer in the 1.26 series. Runtime deployment targets Linux, Docker and a single Kubernetes StatefulSet replica. Windows can be used for development.
+- Snapshot only, CDC only, or an online snapshot followed by continuous replication.
+- Durable bbolt queues, checkpoints, schema history, and resumable operations.
+- Full primary keys, including composite keys, or configured full `UNIQUE NOT NULL` keys.
+- Inserts, updates, deletes, and key changes using row versions and deletion markers.
+- Table filters, type conversion, DEFAULT handling, timezones, source character sets, and LowCardinality strings.
+- Historical DDL handling and generation rebuilds for incompatible type or key changes.
+- `ReplacingMergeTree` and `ReplicatedReplacingMergeTree`, with configurable quorum acknowledgement.
+- File/position or GTID repositioning, reset, and table resnapshot through a local control socket.
+- Graceful shutdown, persistent Docker storage, Kubernetes manifests, and Prometheus metrics.
+- Optional debug archives and Teams, Slack, and Telegram notifications.
+
+## Try it locally
+
+The demo starts isolated MySQL and ClickHouse services, creates sample orders, and runs Migres. It uses publicly known demo credentials. Only the Migres HTTP endpoint is published, on `127.0.0.1:18080`.
 
 ```sh
-go build -o migres ./cmd/migres
+git clone https://github.com/arm092/migres-go.git
+cd migres-go
+docker compose -f examples/compose.yml up -d --build --wait
+curl --fail http://127.0.0.1:18080/readyz
+```
+
+Read current rows:
+
+```sh
+docker compose -f examples/compose.yml exec clickhouse \
+  clickhouse-client --user migres --password demo-only-clickhouse \
+  --database analytics \
+  --query 'SELECT id, customer_id, status, amount FROM orders FINAL WHERE _migres_deleted = 0 ORDER BY id'
+```
+
+Change a source row, then repeat the read:
+
+```sh
+docker compose -f examples/compose.yml exec mysql \
+  mysql -uroot -pdemo-only-root shop \
+  -e "UPDATE orders SET status = 'paid' WHERE id = 1;"
+```
+
+See [the complete demo](examples/README.md) for deletes, key changes, status, and cleanup. CDC is asynchronous; repeat the query after the queues catch up.
+
+## Use your own databases
+
+Requires Go **1.26.9** to build. Runtime deployment targets Linux, Docker, and Kubernetes. Windows is supported for development; exercise Unix socket control and Linux signals on Linux.
+
+```sh
+go build -o bin/migres ./cmd/migres
 cp config.yml.example config.yml
-export MYSQL_PASSWORD='...'
-export CLICKHOUSE_PASSWORD='...'
-./migres check --config config.yml
-./migres run --config config.yml
+# Edit hosts, database names, filters, and a unique CDC server ID.
+export MYSQL_PASSWORD='your-source-password'
+export CLICKHOUSE_PASSWORD='your-target-password'
+./bin/migres check --config config.yml
+./bin/migres run --config config.yml
 ```
 
-Create the target database with `ENGINE=Atomic` before running. A fresh migration requires a separate target database. Existing tables with the same names are accepted only when their ownership generation matches the journal.
+Create a dedicated ClickHouse target database with `ENGINE = Atomic` first. The source needs InnoDB tables, ROW/FULL binlog images, and a stable unique row identity. Online copying requires GTID or a writable prepared signal table. [Setup and permissions](docs/getting-started.md) explain the prerequisites.
 
-MySQL requires InnoDB, `log_bin=ON`, `binlog_format=ROW`, `binlog_row_image=FULL`, and a primary key or a configured full UNIQUE NOT NULL key. Configure a unique `migration.cdc.server_id` per running pipeline. GTID is optional for binlog reading; set `migration.cdc.use_gtid: true` to use GTID resume.
-
-Online copying requires either GTID enabled or a writable dedicated signal table. For a source without GTID, prepare that table once using a user with CREATE privileges:
-
-```sh
-./migres prepare-source --config config.yml
-```
-
-The runtime user needs SELECT and replication privileges, plus INSERT/UPDATE on the signal table in signal mode. Snapshot uses keyset pagination and a binlog boundary after each chunk. Snapshot rows have a baseline version; committed CDC versions take precedence. Schema revisions are checked atomically before publishing a chunk. This produces a convergent copy, not a single database-wide point-in-time snapshot.
-
-`migration.mode` accepts `snapshot` and `cdc`. `snapshot_before: true` performs the initial copy before declaring the CDC service ready. Completed tables and chunks resume from the same journal. Do not delete the journal to restart normally.
-
-## Configuration
-
-See [config.yml.example](config.yml.example). YAML is strict: unknown fields and invalid overrides stop startup. Environment overrides use upper-case YAML paths, for example `MYSQL_HOST`, `CLICKHOUSE_DATABASE`, `MIGRATION_MODE`, `MIGRATION_WORKERS`, `CDC_SERVER_ID`, `CDC_USE_GTID`, `CDC_DB_DEBUG`, `DATA_DIR`, `RUNTIME_DIR`, and `SHUTDOWN_TIMEOUT`. Lists use comma-separated values. Durations use Go units such as `250ms`, `5s`, `1m`.
-
-TLS settings are `mysql.ssl_ca`, `mysql.ssl_disabled`, `clickhouse.secure`, `clickhouse.verify`, `clickhouse.ca_certs`. Teams, Slack and Telegram can run together; secrets can be supplied through `NOTIFICATIONS_TEAMS_WEBHOOK_URL`, `NOTIFICATIONS_SLACK_WEBHOOK_URL`, `NOTIFICATIONS_TELEGRAM_BOT_TOKEN` and `NOTIFICATIONS_TELEGRAM_CHAT_ID`.
-
-No Python `buffer.db` or `state.json` import is performed. Environment names and duration syntax follow this Go configuration; old numeric second values must be converted to duration strings.
-
-## ClickHouse engines and reads
-
-Supported engines: `ReplacingMergeTree`, `ReplicatedReplacingMergeTree`, and an explicit append-only `MergeTree` mode. The convergence contract applies to the replacing engines. Append-only mode retains row versions and requires explicit aggregation by the consumer of the data.
+## Read current state correctly
 
 ```sql
-SELECT * FROM orders FINAL WHERE _migres_deleted = 0;
+SELECT id, customer_id, status, amount
+FROM analytics.orders FINAL
+WHERE _migres_deleted = 0;
 ```
 
-Raw tables contain historical row versions and deletion markers. An ordinary SELECT is not a current-state view. There is no cross-table transaction visibility guarantee.
+Raw tables retain row versions and deletion markers. Use `FINAL` and the deletion filter for current-state reads. Delivery can be retried; Migres does not promise a globally atomic snapshot, cross-table transaction visibility, or simultaneous publication on every replica. [Data guarantees](docs/architecture.md) describe the contract.
 
-For a replicated target configure one shard, `clickhouse.cluster`, and `clickhouse.addresses` containing every replica endpoint. Keeper paths contain a stable generation ID rather than the SQL table name. `write_ack.mode` accepts `single` or `quorum`; `write_ack.quorum` accepts `auto` (majority) or a positive number. With two replicas, majority requires both. Acknowledgement occurs after the configured level; unavailable quorum retains the task for retry.
+## Documentation
 
-DDL is parsed from binlog SQL and its schema history is retained. CREATE, DROP, TRUNCATE, RENAME and column changes are handled in order. Incompatible type/key changes build a shadow table and switch generations. Replica exchanges inspect ownership markers before retrying so a lost response cannot swap generations back. Switching is atomic per server, not simultaneously across replicas. A later ALTER or TRUNCATE invalidates a rebuild and starts a fresh generation. DROP/RENAME during a rebuild follows committed name intervals, so reusing an old name cannot merge unrelated tables. Chained rename operations persist pair identities and acknowledgements for crash recovery. Adding a nonconstant DEFAULT rebuilds the table to copy MySQL�s actual backfilled values. Mixed-database DDL and combined ALTER with table rename require separate statements.
+| Guide | Contents |
+| --- | --- |
+| [Getting started](docs/getting-started.md) | Prerequisites, permissions, build, and first run |
+| [Configuration](docs/configuration.md) | YAML, environment variables, filters, tuning, TLS, notifications |
+| [Architecture and guarantees](docs/architecture.md) | Stages, durable handoffs, snapshots, DDL, replication |
+| [Operations and recovery](docs/operations.md) | Status, reposition, reset, resnapshot, signals, troubleshooting |
+| [Docker and Kubernetes](docs/deployment.md) | Persistent volumes, manifests, probes, upgrades, metrics |
+| [Verification](docs/verification.md) | Unit, integration, fault, soak, and performance checks |
+| [Runnable examples](examples/README.md) | Local demo and replicated target configuration |
+| [Roadmap](ROADMAP.md) | Release gates and planned improvements |
 
-## Runtime control
+## Contributing
 
-Commands contact the running process through its owner-only Unix socket. They do not open the journal as a second writer. Use stable operation IDs when retrying an ambiguous command:
+Bug reports should include database versions, redacted configuration, triggering DDL, operation status, and a minimal reproduction. Do not include passwords, row payloads, private keys, or production debug archives. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-```sh
-migres status --config config.yml
-migres reposition --config config.yml --file mysql-bin.000123 --pos 456 --operation-id recovery-001
-migres reposition --config config.yml --gtid-set 'server-uuid:1-123' --operation-id recovery-002
-migres status --config config.yml --operation-id recovery-001
-migres reset --config config.yml --operation-id reset-001
-migres resnapshot --config config.yml --operation-id copy-001
-migres resnapshot --config config.yml --table orders --operation-id orders-copy-001
-```
+## Support development
 
-Reposition validates transaction boundaries and retained schema history. By default pending work drains first. `--discard-pending` archives and removes pending work. Forward jumps require `--allow-gap` and mark completeness as lost. A forward gap containing SQL without retained schema history requires resnapshot. Rewinding replays source changes; it does not undo ClickHouse to a historical time. Rewinds across DDL are rejected and require resnapshot. GTID reposition requires an exact retained boundary. In GTID mode, file/position must also have a retained GTID mapping. Positions older than retained history require a new snapshot. A table resnapshot returns `queued`; its operation becomes `done` after publication, and readiness stays false while it rebuilds.
+If Migres helps your work, [sponsor Arman on GitHub](https://github.com/sponsors/arm092). Sponsorship supports maintenance, recovery testing, and compatibility work.
 
-`reset` drops only objects registered to this journal and verifies generation markers before dropping. It resets local replication state and starts a fresh copy when configured. Never reuse a data directory for a different source. Interrupted applying reset operations resume on startup.
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor_on_GitHub-Support_Migres-ea4aaa?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/arm092)
 
-Linux SIGUSR1 requests reset. SIGUSR2 requests the configured `force_binlog_position`; the setting is not applied during ordinary startup. The same transaction-boundary and gap checks apply to signals.
+## License
 
-SIGTERM/SIGINT stops scheduling work, saves Producer state, completes Transformer transactions, and lets Consumer finish in-flight writes within `shutdown_timeout`. It does not empty the whole backlog. Unknown write outcomes stay unacknowledged for replay.
-
-## Deployment and observability
-
-Docker: `docker compose up -d`. Use a persistent volume and retain it across upgrades.
-
-Kubernetes manifests are in [deploy/kubernetes/statefulset.yaml](deploy/kubernetes/statefulset.yaml). Create a `migres` ConfigMap containing `config.yml` and a `migres` Secret with `mysql-password` / `clickhouse-password`. Build and publish an image to your registry, then replace the manifest image reference with its immutable digest. No image is automatically published by this repository.
-
-Use a CSI StorageClass supporting ReadWriteOncePod; set `volumeClaimTemplates[].spec.storageClassName` if that class is not the cluster default. Configure image pull credentials separately for a private registry.
-
-The StatefulSet uses one replica, a ReadWriteOncePod PVC, non-root execution, and a 90-second termination grace period. The storage driver must support ReadWriteOncePod and reliable exclusive file locking. Never force-delete a Pod and start another owner without fencing the former node.
-
-`/livez` reports process health, `/readyz` reports initial delivery and blocking state, `/metrics` exposes queue and pipeline gauges. A permanent error keeps the process available for diagnostics/recovery while readiness is false. Transient connection failures retry without relying on liveness restarts.
-
-Tune worker counts, row batches, `max_transaction_bytes`, `max_queue_bytes` and container memory together for the source row sizes. Transactions above the staging limit stop without advancing their checkpoint. Replay identity and schema history are retained for the lifetime of the journal; provision and monitor its disk space. The free-space reserve pauses ingestion before disk exhaustion. MySQL transaction compression and partial JSON binlog images must be disabled. Text is decoded using the persisted column charset; binary payloads remain bytes. UTF-8, latin1/Windows code pages and common Asian encodings are supported; an unknown or lossy encoding blocks ingestion. Changing the database's default charset requires an explicit reset and resnapshot. Table/column charset changes are recorded in schema history; conversions rebuild the target generation. A rebuild that exhausts queue capacity before reaching its catch-up boundary blocks durably; raise the queue/disk allowance and restart to resume.
-
-`cdc.db_debug: true` explicitly archives event/task payloads in instance-specific `_migres_debug_*` tables, with `debug_retention` TTL. Normal logs must not include credentials or row payloads. Debug archive access should match source-data access.
-
-## Verification
-
-```sh
-go test ./...
-go vet ./...
-go test -race ./...
-docker compose -p migres-go-test -f test/compose.yml up -d --wait
-MIGRES_INTEGRATION=1 go test ./test ./internal/app -count=1 -timeout=10m
-docker compose -p migres-go-replicated -f test/replicated.yml up -d --wait
-MIGRES_INTEGRATION=1 MIGRES_REPLICATED=1 go test ./test -count=1 -timeout=10m
-MIGRES_INTEGRATION=1 MIGRES_FAULTS=1 go test ./test -run TestReplicaLoss -v -count=1 -timeout=3m
-MIGRES_INTEGRATION=1 MIGRES_SOAK_DURATION=24h go test ./test -run '^TestSoak$' -v -count=1 -timeout=25h
-```
-
-These fixtures use isolated databases and published localhost ports. Never point them at production. `MIGRES_FAULTS=1` temporarily stops the fixture's second ClickHouse replica. The soak repeatedly reconciles every key/value and the source checkpoint after transactions, rollbacks, process kills and binlog rotations. An interrupted run does not count as a completed 24-hour acceptance run. `MIGRES_TEST_HOST`, `MIGRES_MYSQL_PORT` and `MIGRES_CLICKHOUSE_PORT` select the fixture endpoints.
-
-Integration checks have passed against MySQL 5.7/8.0/8.4 and ClickHouse 24.8/26.8, plus two 24.8 replicas with Keeper, quorum failure, connection failover and partial DDL recovery. Linux race tests include real database integration. Docker non-root volume startup, socket control and SIGTERM have been exercised. A local Kubernetes 1.37 cluster with a CSI hostpath driver exercised ReadWriteOncePod exclusion, persistent Pod replacement, rolling restart, SIGKILL during a pending INSERT, database-outage liveness, reset preserving a foreign table, GTID replay and SIGUSR2. Additional fault checks cover snapshot SIGTERM/SIGKILL in both modes, interrupted reset, lost binlog with reset recovery, actual ENOSPC, compound rename replay, reused table names, and replicated rebuild/drop. Verified TLS fixtures reject unknown CAs; notifier contracts use local mocks. A small synthetic snapshot baseline is available, but production storage fencing, a completed 24-hour soak and workload-specific capacity validation remain release acceptance requirements. This repository is an initial implementation, not a production-qualified release.
+[MIT](LICENSE).
