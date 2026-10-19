@@ -6,7 +6,7 @@ This is the public development direction. Items are proposals or acceptance gate
 
 ## Production readiness
 
-- [ ] Complete a continuous 24-hour workload/fault run on a frozen runtime revision, with exact row and checkpoint reconciliation and a final PASS.
+- [x] Complete a continuous 24-hour workload/fault run on a frozen runtime revision, with exact row and checkpoint reconciliation and a final PASS.
 - [ ] Publish a reproducible acceptance report for supported MySQL/ClickHouse combinations, including every replica after failover and partial DDL.
 - [ ] Validate node-loss fencing, PVC reattachment, and restore on production-equivalent CSI storage.
 - [ ] Extend repeated fault injection around queue commits, INSERT acknowledgement, generation publication, reset, and control-connection loss.

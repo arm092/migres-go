@@ -52,6 +52,8 @@ MIGRES_INTEGRATION=1 MIGRES_SOAK_DURATION=24h \
 
 The soak reconciles every key/value and the source checkpoint after transaction cycles, rollbacks, process kills, and binlog rotations. Success requires the entire duration and a final PASS/exit 0. Shutdown time, interrupted attempts, and progress messages alone do not establish a successful run.
 
+On 19 October 2026, runtime revision `90fca7fa9dfb3c373928b629d0ba194d244ebc03` completed the configured continuous 24-hour synthetic run: `TestSoak` PASS in 86,401.58 seconds and container exit 0. The last periodic progress reported 254,670 cycles with exact reconciliation. The runner was limited to 1 CPU and 2 GiB RAM; database fixtures ran on the shared local Docker host. This validates this fixture, not production workload capacity.
+
 ## Coverage and limits
 
 Implemented checks cover durable handoffs, composite keys and key changes, rollback, restart, schema changes/rebuilds, name reuse, chained rename replay, reset ownership, missing binlogs, quorum failure/failover, partial DDL, disk exhaustion, and snapshot SIGTERM/SIGKILL in GTID/signal modes. TLS fixtures have exercised trusted and unknown CAs; notification payload/rate contracts use local HTTP mocks.
@@ -67,4 +69,4 @@ MIGRES_INTEGRATION=1 MIGRES_PERFORMANCE=1 \
 
 This small synthetic snapshot fixture reports elapsed time, rows/second, and journal size. Record hardware, container limits, database settings, row widths, batch sizes, and background load with results. It is not a production capacity recommendation or CDC latency benchmark.
 
-Before production, complete the continuous soak, validate target storage fencing, reconcile source/target values per replica, test restore, and measure the actual workload. See [release gates](../ROADMAP.md#production-readiness).
+Before production, validate target storage fencing, reconcile source/target values per replica, test restore, and measure the actual workload. See [release gates](../ROADMAP.md#production-readiness).

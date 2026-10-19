@@ -13,7 +13,7 @@ Migres Go copies existing rows, streams committed changes, and resumes from dura
 MySQL -> Producer -> durable events -> Transformer -> durable tasks -> Consumer -> ClickHouse
 ```
 
-**Project status:** early implementation with integration and fault recovery coverage. Production storage fencing, a completed continuous 24-hour acceptance run, and validation against your workload are release gates. See [verification](docs/verification.md) and the [roadmap](ROADMAP.md).
+**Project status:** early implementation with integration and fault recovery coverage. A continuous 24-hour synthetic fault run passed on runtime revision `90fca7f`. Production storage fencing and validation against your workload remain release gates. See [verification](docs/verification.md) and the [roadmap](ROADMAP.md).
 
 ## Features
 
