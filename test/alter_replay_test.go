@@ -28,15 +28,15 @@ func TestCompoundAlterReplayReusedName(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	s := model.Schema{Table: fmt.Sprintf("alter_replay_%d", time.Now().UnixNano()), Generation: fmt.Sprintf("gen_%d", time.Now().UnixNano()), Columns: []model.Column{{Name: "id", MySQLType: "bigint", CHType: "Int64"}, {Name: "a", MySQLType: "int", CHType: "Int32"}}, Keys: []string{"id"}}
+	s := model.Schema{Table: fmt.Sprintf("alter_replay_%d", time.Now().UnixNano()), Generation: fmt.Sprintf("gen_%d", time.Now().UnixNano()), Columns: []model.Column{{Name: "id", MySQLType: "bigint", CHType: "Int64"}, {Name: "a", MySQLType: "int", CHType: "Int32"}, {Name: "obsolete", MySQLType: "int", CHType: "Int32"}, {Name: "label", MySQLType: "varchar(20)", CHType: "String"}}, Keys: []string{"id"}}
 	if err = a.Sink.Ensure(ctx, s); err != nil {
 		t.Fatal(err)
 	}
 	defer a.Sink.DropOwned(context.Background(), s)
-	if err = a.Sink.Execute(ctx, model.Task{Kind: "insert", Table: s.Table, Schema: &s, Token: s.Generation + ":row", Rows: []model.Row{{Values: []model.Value{model.Encode(int64(1)), model.Encode(int32(99))}, Version: 2}}}); err != nil {
+	if err = a.Sink.Execute(ctx, model.Task{Kind: "insert", Table: s.Table, Schema: &s, Token: s.Generation + ":row", Rows: []model.Row{{Values: []model.Value{model.Encode(int64(1)), model.Encode(int32(99)), model.Encode(int32(7)), model.Encode("preserved")}, Version: 2}}}); err != nil {
 		t.Fatal(err)
 	}
-	query := "ALTER TABLE `" + s.Table + "` RENAME COLUMN a TO b, ADD COLUMN a INT NOT NULL DEFAULT 0"
+	query := "ALTER TABLE `" + s.Table + "` RENAME COLUMN a TO b, ADD COLUMN a INT NOT NULL DEFAULT 0, DROP COLUMN obsolete, CHANGE COLUMN label title VARCHAR(20) NOT NULL DEFAULT 'new'"
 	fresh, rebuild, err := schema.Apply(s, query, c)
 	if err != nil || rebuild {
 		t.Fatal(rebuild, err)
@@ -48,7 +48,8 @@ func TestCompoundAlterReplayReusedName(t *testing.T) {
 		}
 	}
 	var old, freshValue int32
-	if err = a.Sink.Conn.QueryRow(ctx, "SELECT b,a FROM "+schema.Ref(c.ClickHouse.Database, s.Table)+" FINAL WHERE _migres_deleted=0").Scan(&old, &freshValue); err != nil || old != 99 || freshValue != 0 {
+	var title string
+	if err = a.Sink.Conn.QueryRow(ctx, "SELECT b,a,title FROM "+schema.Ref(c.ClickHouse.Database, s.Table)+" FINAL WHERE _migres_deleted=0").Scan(&old, &freshValue, &title); err != nil || old != 99 || freshValue != 0 || title != "preserved" {
 		t.Fatalf("data changed during replay: %d %d %v", old, freshValue, err)
 	}
 }

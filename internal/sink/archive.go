@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/arm092/migres-go/internal/journal"
 	"github.com/arm092/migres-go/internal/model"
@@ -38,12 +39,20 @@ func (c *ClickHouse) archive(ctx context.Context, kind string, id uint64, payloa
 		return err
 	}
 	if count > 0 {
-		var marker string
-		if err := c.Conn.QueryRow(ctx, "SELECT comment FROM system.tables WHERE database=? AND name=?", c.Config.ClickHouse.Database, table).Scan(&marker); err != nil {
+		var marker, definition string
+		if err := c.Conn.QueryRow(ctx, "SELECT comment, create_table_query FROM system.tables WHERE database=? AND name=?", c.Config.ClickHouse.Database, table).Scan(&marker, &definition); err != nil {
 			return err
 		}
 		if marker != "migres:"+instance {
 			return fmt.Errorf("debug archive table is not owned")
+		}
+		// CREATE IF NOT EXISTS preserves the old TTL across restarts. Reconcile
+		// only an owned archive whose configured retention actually changed.
+		ttl := "recorded + toIntervalSecond(" + fmt.Sprint(int64(c.Config.DebugRetention.Seconds())) + ")"
+		if !strings.Contains(definition, "TTL "+ttl+" ") && !strings.HasSuffix(definition, "TTL "+ttl) {
+			if err := c.Conn.Exec(ctx, "ALTER TABLE "+schema.Ref(c.Config.ClickHouse.Database, table)+cluster+" MODIFY TTL "+ttl+" DELETE"); err != nil {
+				return err
+			}
 		}
 	}
 	if err := c.Conn.Exec(ctx, q); err != nil {

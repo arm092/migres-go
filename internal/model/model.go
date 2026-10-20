@@ -133,6 +133,9 @@ type Progress struct {
 type Stats struct {
 	StagedEvents     int      `json:"staged_events"`
 	JournalBytes     int64    `json:"journal_bytes"`
+	ReusableBytes    int64    `json:"reusable_bytes"`
+	HistoryBytes     int64    `json:"history_bytes"`
+	HistoryEntries   int      `json:"history_entries"`
 	OldestAgeSeconds int64    `json:"oldest_age_seconds"`
 	Events           int      `json:"events"`
 	Tasks            int      `json:"tasks"`

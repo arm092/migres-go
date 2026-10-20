@@ -102,7 +102,7 @@ The retained `checkpoint_interval_rows` name currently counts events, not rows i
 | `max_queue_bytes` | `10737418240` | Active queue threshold |
 | `max_transaction_bytes` | `1073741824` | Transaction staging limit |
 | `min_free_disk_bytes` | `1073741824` | Free-space reserve |
-| `debug_retention` | `24h` | ClickHouse debug archive TTL |
+| `debug_retention` | `24h` | ClickHouse debug archive TTL; whole seconds, minimum `1s` |
 
 These are admission/backpressure limits, not a process RSS cap. Size rows, batches, staging, workers, and container memory together. Replay identities and schema history currently remain for the journal lifetime; active queue thresholds do not cap total historical storage.
 
@@ -154,4 +154,4 @@ notifications:
 
 Provide `NOTIFICATIONS_TEAMS_WEBHOOK_URL`, `NOTIFICATIONS_SLACK_WEBHOOK_URL`, `NOTIFICATIONS_TELEGRAM_BOT_TOKEN`, and `NOTIFICATIONS_TELEGRAM_CHAT_ID`. Providers can run together. Rate limiting is per notification kind; notifications do not have a durable outbox.
 
-`CDC_DB_DEBUG=true` archives source event/task payloads in instance-specific `_migres_debug_*` tables. Restrict archive access to match source-data access. Debug archive mode is separate from logging verbosity. TTL cleanup follows ClickHouse background processing, not an immediate deletion deadline.
+`CDC_DB_DEBUG=true` archives source event/task payloads in instance-specific `_migres_debug_*` tables. Restrict archive access to match source-data access. Debug archive mode is separate from logging verbosity. TTL cleanup follows ClickHouse background processing, not an immediate deletion deadline. Changed retention is applied to each existing owned archive on its next write, including after restart.

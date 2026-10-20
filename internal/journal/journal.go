@@ -375,9 +375,28 @@ func (s *Store) Stats() (model.Stats, error) {
 		}
 		return nil
 	})
+	st.ReusableBytes = int64(s.db.Stats().FreeAlloc)
 	if fi, err := os.Stat(s.path); err == nil {
 		st.JournalBytes = fi.Size()
 	}
+	return st, err
+}
+
+// StorageStats scans retained history for diagnostics only. Keep this out of the
+// Producer/backpressure hot path: history grows even when active queues drain.
+func (s *Store) StorageStats() (model.Stats, error) {
+	st, err := s.Stats()
+	if err != nil {
+		return st, err
+	}
+	err = s.db.View(func(tx *bolt.Tx) error {
+		for _, name := range []string{"versions", "boundaries", "schema_history", "operations", "archive"} {
+			bs := tx.Bucket([]byte(name)).Stats()
+			st.HistoryBytes += int64(bs.LeafInuse + bs.BranchInuse)
+			st.HistoryEntries += bs.KeyN
+		}
+		return nil
+	})
 	return st, err
 }
 func (s *Store) Operation(op model.Operation) error {

@@ -9,6 +9,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// Linux is the deployment target. Windows does not support directory fsync.
+func syncDirectory(string) error { return nil }
+
 func (s *Store) CheckDisk(reserve uint64) error {
 	path, err := windows.UTF16PtrFromString(filepath.Dir(s.path))
 	if err != nil {

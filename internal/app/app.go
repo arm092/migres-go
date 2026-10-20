@@ -290,7 +290,7 @@ func (a *App) Handler() http.Handler {
 		w.Write([]byte("ready\n"))
 	})
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		s, err := a.Store.Stats()
+		s, err := a.Store.StorageStats()
 		if err != nil {
 			http.Error(w, "journal unavailable", 503)
 			return
@@ -301,6 +301,7 @@ func (a *App) Handler() http.Handler {
 		a.Store.Meta("consumer_retries", &retries)
 		a.Store.Meta("delivered_rows", &delivered)
 		fmt.Fprintf(w, "migres_storage_bytes %d\nmigres_staged_events %d\nmigres_oldest_pending_age_seconds %d\nmigres_consumer_retries_total %d\nmigres_delivered_rows_total %d\n", s.JournalBytes, s.StagedEvents, s.OldestAgeSeconds, retries, delivered)
+		fmt.Fprintf(w, "migres_journal_reusable_bytes %d\nmigres_journal_history_bytes %d\nmigres_journal_history_entries %d\n", s.ReusableBytes, s.HistoryBytes, s.HistoryEntries)
 		var snapshotDone bool
 		a.Store.Meta("snapshot_done", &snapshotDone)
 		fmt.Fprintf(w, "migres_stage_running{stage=\"producer\"} %d\nmigres_stage_running{stage=\"transformer\"} %d\nmigres_stage_running{stage=\"consumer\"} %d\nmigres_snapshot_running %d\nmigres_snapshot_complete %d\nmigres_ddl_running %d\nmigres_rebuild_running %d\n", boolInt(a.ProducerRunning.Load()), boolInt(a.TransformerRunning.Load()), boolInt(a.ConsumerRunning.Load()), boolInt(a.SnapshotRunning.Load()), boolInt(snapshotDone), boolInt(a.DDLRunning.Load()), boolInt(a.RebuildRunning.Load()))

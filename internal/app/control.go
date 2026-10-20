@@ -127,7 +127,7 @@ func (a *App) Serve(ctx context.Context) error {
 				json.NewEncoder(w).Encode(Response{Error: "operation not found"})
 				return
 			}
-			st, err := a.Store.Stats()
+			st, err := a.Store.StorageStats()
 			out := Response{Stats: &st}
 			a.Store.Meta("last_error", &out.Diagnostic)
 			if err != nil {

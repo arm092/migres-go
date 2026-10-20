@@ -197,8 +197,11 @@ func (c Config) Validate() error {
 	if c.Migration.Workers < 1 || c.Migration.ConsumerWorkers < 1 || c.Migration.BatchRows < 1 || c.Migration.BatchRows > 100000 {
 		return fmt.Errorf("workers and batch_rows must be positive (batch_rows <= 100000)")
 	}
-	if c.ShutdownTimeout <= 0 || c.MaxQueueBytes <= 0 || c.Migration.CDC.ServerID == 0 || c.MaxTransactionBytes <= 0 || c.MinFreeDiskBytes < 0 || c.DebugRetention <= 0 {
+	if c.ShutdownTimeout <= 0 || c.MaxQueueBytes <= 0 || c.Migration.CDC.ServerID == 0 || c.MaxTransactionBytes <= 0 || c.MinFreeDiskBytes < 0 {
 		return fmt.Errorf("timeouts, queue limit and server_id must be positive")
+	}
+	if c.DebugRetention < time.Second || c.DebugRetention%time.Second != 0 {
+		return fmt.Errorf("debug_retention must be a whole number of seconds (at least 1s)")
 	}
 	if c.Migration.CDC.TransformerPoll <= 0 || c.Migration.CDC.ConsumerPoll <= 0 || c.Migration.CDC.ProducerFlush <= 0 || c.Migration.CDC.Heartbeat <= 0 {
 		return fmt.Errorf("stage intervals must be positive")

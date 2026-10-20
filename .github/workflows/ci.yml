@@ -28,7 +28,7 @@ jobs:
         env:
           MIGRES_INTEGRATION: '1'
           MIGRES_SOURCE_FAULTS: '1'
-      - run: docker run --rm --tmpfs /limited:size=4m -e MIGRES_DISK_FAULT_DIR=/limited -v "$PWD:/src" -w /src golang:1.26.9 go test ./internal/journal -run '^TestDiskFault$' -v -count=1 -timeout=30s
+      - run: docker run --rm --tmpfs /limited:size=4m -e MIGRES_DISK_FAULT_DIR=/limited -v "$PWD:/src" -w /src golang:1.26.9 go test ./internal/journal -run 'TestDiskFault|TestOfflineExportFullDisk' -v -count=1 -timeout=30s
       - if: always()
         run: docker compose -p migres-go-test -f test/compose.yml down -v
   integration:

@@ -12,6 +12,13 @@ import (
 )
 
 func Transform(e model.Event) ([]model.Task, error) {
+	return transform(context.Background(), e)
+}
+
+func transform(ctx context.Context, e model.Event) ([]model.Task, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if e.Kind == "position" {
 		return nil, nil
 	}
@@ -30,6 +37,9 @@ func Transform(e model.Event) ([]model.Task, error) {
 		version = 1
 	}
 	for rowIndex, r := range e.Rows {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if e.Kind != "snapshot" {
 			version = e.Sequence + uint64(rowIndex)
 		}
@@ -111,7 +121,10 @@ func (t *Transformer) Run(ctx context.Context) error {
 		all := []model.Task{}
 		ids := []uint64{}
 		for _, e := range events {
-			tasks, err := Transform(e)
+			tasks, err := transform(ctx, e)
+			if ctx.Err() != nil {
+				return nil
+			}
 			if err != nil {
 				return err
 			}
@@ -125,6 +138,9 @@ func (t *Transformer) Run(ctx context.Context) error {
 			}
 			for _, task := range tasks {
 				for task.Kind == "insert" && len(task.Rows) > batchRows {
+					if ctx.Err() != nil {
+						return nil
+					}
 					part := task
 					part.Rows = append([]model.Row(nil), task.Rows[:batchRows]...)
 					all = append(all, part)
@@ -140,6 +156,9 @@ func (t *Transformer) Run(ctx context.Context) error {
 				}
 				all = append(all, task)
 			}
+		}
+		if ctx.Err() != nil {
+			return nil
 		}
 		if err = t.Store.TransformBatch(ids, all); err != nil {
 			return err

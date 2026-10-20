@@ -4,9 +4,19 @@ package journal
 
 import (
 	"fmt"
+	"os"
 
 	"golang.org/x/sys/unix"
 )
+
+func syncDirectory(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
+}
 
 func (s *Store) CheckDisk(reserve uint64) error {
 	var st unix.Statfs_t

@@ -248,6 +248,27 @@ func (p *Producer) Run(ctx context.Context) error {
 			d, parseErr := schema.Parse(q)
 			database := string(x.Schema)
 			references, scopeErr := schema.ReferencesDatabase(q, database, c.MySQL.Database)
+			// Decide table selection from the AST even when Parse rejects a valid
+			// MySQL operation. An excluded table's unsupported DDL must not stop
+			// an unrelated stream. Unknown syntax or table-less statements still
+			// take the fail-closed path below.
+			unrelatedTables := false
+			refs, refsErr := schema.QueryTables(q, database)
+			if refsErr == nil && len(refs) > 0 {
+				tracked := false
+				for _, ref := range refs {
+					if ref.Database == c.MySQL.Database && p.tracked(ref.Table) {
+						tracked = true
+						break
+					}
+				}
+				if !tracked {
+					unrelatedTables = true
+					database = ""
+					references = false
+					scopeErr = nil
+				}
+			}
 			if scopeErr != nil && (database == c.MySQL.Database || references) {
 				return scopeErr
 			}
@@ -260,7 +281,7 @@ func (p *Producer) Run(ctx context.Context) error {
 			if references {
 				database = c.MySQL.Database
 			}
-			if database != c.MySQL.Database {
+			if unrelatedTables || database != c.MySQL.Database {
 				if x.GSet != nil {
 					next.GTID, err = MergeGTID(next.GTID, x.GSet)
 					if err != nil {

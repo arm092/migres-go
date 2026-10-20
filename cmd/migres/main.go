@@ -8,11 +8,13 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"time"
 	_ "time/tzdata"
 
 	"github.com/arm092/migres-go/internal/app"
 	"github.com/arm092/migres-go/internal/config"
+	"github.com/arm092/migres-go/internal/journal"
 	"github.com/arm092/migres-go/internal/schema"
 	"github.com/arm092/migres-go/internal/source"
 )
@@ -39,6 +41,8 @@ func run() error {
 	gap := f.Bool("allow-gap", false, "explicitly permit skipping source changes")
 	table := f.String("table", "", "table to resnapshot")
 	operation := f.String("operation-id", "", "idempotent operation ID")
+	output := f.String("output", "", "new backup or compacted journal path (offline only)")
+	input := f.String("input", "", "backup journal to restore into an empty data directory")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
@@ -55,6 +59,16 @@ func run() error {
 	defer cancel()
 	registerTermination(cancel)
 	switch command {
+	case "backup", "compact":
+		return journal.ExportOffline(filepath.Join(c.DataDir, "journal.db"), *output, command == "compact")
+	case "restore":
+		if *input == "" {
+			return fmt.Errorf("input path is required")
+		}
+		if err := os.MkdirAll(c.DataDir, 0700); err != nil {
+			return err
+		}
+		return journal.ExportOffline(*input, filepath.Join(c.DataDir, "journal.db"), false)
 	case "prepare-source":
 		m, err := source.Open(c)
 		if err != nil {

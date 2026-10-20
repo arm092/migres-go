@@ -16,9 +16,10 @@ Done means evidence from repeatable runs, not only code paths or passing unit te
 
 ## Operations and recovery
 
-- [ ] Journal backup/restore and offline integrity tooling with documented version compatibility.
+- [x] Offline checked journal backup/restore and compaction, with exclusive-owner protection and same-version recovery tests.
+- [ ] Coordinated ClickHouse/journal disaster recovery and journal migrations across binary versions.
 - [ ] Configurable history/version retention with an explicit earliest safe replay boundary and protection for active rebuilds/operations.
-- [ ] Bounded journal compaction and disk growth monitoring.
+- [x] Offline journal compaction and live retained-history/free-page growth metrics.
 - [ ] A reconciliation command reporting missing, extra, and divergent keys/values before any repair.
 - [ ] Exportable operation history, clearer progress, and cancellable long-running operations at safe boundaries.
 - [ ] Prometheus alert examples and Grafana dashboards for backlog, free space, blocked delivery, quorum, and replica delay.
