@@ -277,6 +277,8 @@ func (m *MySQL) Schema(ctx context.Context, table string) (model.Schema, error) 
 			if col.Name == s.Columns[i].Name {
 				s.Columns[i].Elements = col.Elements
 				s.Columns[i].DefaultExpression = col.DefaultExpression
+				s.Columns[i].Default = col.Default
+				s.Columns[i].DefaultSQL = col.DefaultSQL
 			}
 		}
 	}

@@ -144,6 +144,9 @@ func (s *Snapshot) table(ctx context.Context, table string) error {
 	}
 	p.Table = table
 	sc, err := s.Store.Schema(table)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -180,7 +183,16 @@ func (s *Snapshot) table(ctx context.Context, table string) error {
 		}
 		rows, err := s.Source.Chunk(ctx, sc, p.LastKey, s.Config.Migration.BatchRows)
 		if err != nil {
+			// DDL can rename/drop the source after the schema read above. Let
+			// Producer publish that history before deciding whether this chunk
+			// failed or its old-name snapshot job has become obsolete.
+			if boundary, e := s.Source.Position(ctx); e == nil {
+				_ = s.await(ctx, boundary)
+			}
 			latest, e := s.Store.Schema(table)
+			if errors.Is(e, os.ErrNotExist) {
+				return nil
+			}
 			if e == nil && latest.Revision != sc.Revision {
 				continue
 			}

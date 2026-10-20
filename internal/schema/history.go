@@ -44,13 +44,8 @@ func column(def *ast.ColumnDef, c config.Config, defaultCharset string) (model.C
 		case ast.ColumnOptionNotNull, ast.ColumnOptionPrimaryKey:
 			out.Nullable = false
 		case ast.ColumnOptionDefaultValue:
-			if v, ok := o.Expr.(ast.ValueExpr); ok {
-				if v.GetValue() != nil {
-					x := fmt.Sprint(v.GetValue())
-					out.Default = &x
-				}
-			} else {
-				out.DefaultExpression = true
+			if err := setDefault(&out, o.Expr); err != nil {
+				return out, err
 			}
 		case ast.ColumnOptionGenerated:
 			out.Generated = true
@@ -244,6 +239,23 @@ func Apply(old model.Schema, sql string, c config.Config) (model.Schema, bool, e
 					return s, false, err
 				}
 			}
+		case ast.AlterTableAlterColumn:
+			for _, def := range spec.NewColumns {
+				i := index(def.Name.Name.O)
+				if i < 0 {
+					return s, false, fmt.Errorf("unknown default column %s", def.Name.Name.O)
+				}
+				s.Columns[i].Default = nil
+				s.Columns[i].DefaultExpression = false
+				s.Columns[i].DefaultSQL = ""
+				for _, option := range def.Options {
+					if option.Expr != nil {
+						if err := setDefault(&s.Columns[i], option.Expr); err != nil {
+							return s, false, err
+						}
+					}
+				}
+			}
 		case ast.AlterTableDropColumn:
 			i := index(spec.OldColumnName.Name.O)
 			if i < 0 {
@@ -320,7 +332,6 @@ func Apply(old model.Schema, sql string, c config.Config) (model.Schema, bool, e
 			}
 		case ast.AlterTableRenameTable:
 			s.Table = spec.NewTable.Name.O
-			rebuild = true
 		case ast.AlterTableDropIndex:
 			if len(c.MySQL.Keys[s.Table]) > 0 {
 				return s, false, fmt.Errorf("dropping indexes with a configured identity requires key revalidation and resnapshot")

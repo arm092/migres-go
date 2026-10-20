@@ -112,3 +112,42 @@ func TestColumnCollationDeterminesHistoricalCharset(t *testing.T) {
 		t.Fatalf("%+v %v", next, err)
 	}
 }
+
+func TestAlterDefaultPreservesColumnShape(t *testing.T) {
+	c := config.Default()
+	s, err := FromCreate("CREATE TABLE t(id INT PRIMARY KEY,v BIGINT NOT NULL DEFAULT -10,stamp TIMESTAMP NULL)", "db", "g", c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := s.Columns[1]
+	for _, clause := range []string{"SET DEFAULT 6", "DROP DEFAULT", "SET DEFAULT -3"} {
+		next, rebuild, err := Apply(s, "ALTER TABLE t ALTER COLUMN v "+clause, c)
+		if err != nil || rebuild {
+			t.Fatalf("%s: rebuild=%v %v", clause, rebuild, err)
+		}
+		col := next.Columns[1]
+		if col.CHType != original.CHType || col.MySQLType != original.MySQLType || col.Nullable != original.Nullable {
+			t.Fatalf("shape changed: %+v", col)
+		}
+		steps, err := AlterSteps("ALTER TABLE t ALTER COLUMN v "+clause, c)
+		if err != nil || len(steps) != 1 || steps[0].Kind != "default" {
+			t.Fatalf("steps=%+v %v", steps, err)
+		}
+		s = next
+	}
+	next, rebuild, err := Apply(s, "ALTER TABLE t ALTER COLUMN stamp SET DEFAULT (CURRENT_TIMESTAMP)", c)
+	if err != nil || rebuild || Default(next.Columns[2]) != "now64(0)" {
+		t.Fatalf("%+v %v %v", next, rebuild, err)
+	}
+	next, _, err = Apply(next, "ALTER TABLE t ALTER COLUMN stamp SET DEFAULT NULL", c)
+	if err != nil || Default(next.Columns[2]) != "NULL" {
+		t.Fatalf("NULL lost: %+v %v", next, err)
+	}
+	next, _, err = Apply(next, "ALTER TABLE t ALTER COLUMN stamp DROP DEFAULT", c)
+	if err != nil || Default(next.Columns[2]) != "" {
+		t.Fatalf("DROP lost: %+v %v", next, err)
+	}
+	if _, _, err = Apply(s, "ALTER TABLE t ALTER COLUMN missing SET DEFAULT 1", c); err == nil {
+		t.Fatal("unknown column accepted")
+	}
+}

@@ -60,7 +60,7 @@ func (a *App) rebuildLineage(ctx context.Context, t model.Task) (rebuildLineage,
 		if err != nil {
 			return out, err
 		}
-		if ddl.Kind == "rename" {
+		if len(ddl.Pairs) > 0 {
 			for _, pair := range ddl.Pairs {
 				if pair[0] == out.Table {
 					out.Windows[len(out.Windows)-1].Through = e.Position

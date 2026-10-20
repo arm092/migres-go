@@ -39,7 +39,8 @@ The current Kubernetes image reference is a placeholder for an image the operato
 
 ## Compatibility and schema evolution
 
-- [ ] Broaden DDL fixtures for mixed-database operations and ALTER statements combining table rename with column changes.
+- [x] ALTER COLUMN SET/DROP DEFAULT and compound ALTER combining table rename with column changes, with resumable delivery and replay fixtures.
+- [ ] Broaden safe cross-database DDL handling; mixed-database operations currently require separate recovery planning.
 - [ ] Investigate safe replay across DDL using historical generations, without claiming that rewind restores ClickHouse to a past state.
 - [ ] Expand charset, temporal edge-case, generated-column, expression DEFAULT, and unsupported type diagnostics.
 - [ ] Evaluate transaction compression and partial JSON support with explicit decoder compatibility tests.

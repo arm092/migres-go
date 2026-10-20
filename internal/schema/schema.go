@@ -86,8 +86,8 @@ func Create(s model.Schema, c config.Config) (string, error) {
 			return "", fmt.Errorf("reserved column %s", col.Name)
 		}
 		def := Quote(col.Name) + " " + col.CHType
-		if col.Default != nil {
-			def += " DEFAULT " + Literal(*col.Default)
+		if expr := Default(col); expr != "" {
+			def += " DEFAULT " + expr
 		}
 		cols = append(cols, def)
 	}
@@ -163,13 +163,15 @@ func Parse(sql string) (DDL, error) {
 		d.Database = x.Table.Schema.O
 		for _, spec := range x.Specs {
 			if spec.Tp == ast.AlterTableRenameTable {
-				if len(x.Specs) != 1 {
-					return d, fmt.Errorf("combined ALTER RENAME TABLE requires separate statements")
-				}
-				if spec.NewTable.Schema.O != "" && spec.NewTable.Schema.O != d.Database {
+				if spec.NewTable.Schema.O != "" && d.Database != "" && spec.NewTable.Schema.O != d.Database {
 					return d, fmt.Errorf("cross-database ALTER RENAME is unsupported")
 				}
-				d.Kind = "rename"
+				if len(d.Pairs) != 0 {
+					return d, fmt.Errorf("multiple table renames in ALTER are unsupported")
+				}
+				if len(x.Specs) == 1 {
+					d.Kind = "rename"
+				}
 				d.Pairs = [][2]string{{x.Table.Name.O, spec.NewTable.Name.O}}
 			}
 		}

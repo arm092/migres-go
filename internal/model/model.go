@@ -68,6 +68,7 @@ func (v Value) SQL() any {
 }
 
 type Column struct {
+	DefaultSQL        string   `json:"default_sql,omitempty"`
 	DefaultExpression bool     `json:"default_expression,omitempty"`
 	Charset           string   `json:"charset,omitempty"`
 	Elements          []string `json:"elements,omitempty"`

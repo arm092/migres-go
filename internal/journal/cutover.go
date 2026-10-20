@@ -53,7 +53,15 @@ func (s *Store) RetireRebuildTasks(windows []TableWindow, boundary model.Positio
 				if err != nil {
 					return err
 				}
-				if d.Kind == "rename" || d.Kind == "drop" {
+				if d.Kind == "alter" && len(d.Pairs) > 0 && t.Token != operation && InTableWindows(windows, t.Table, t.Position) && positionLE(t.Position, boundary) {
+					// The new generation already contains this ALTER's final shape.
+					// Keep its naming barrier, but do not replay destructive column
+					// steps (DROP/ADD name reuse) on the rebuilt data.
+					if err := put(tx.Bucket([]byte("meta")), []byte("compoundabsorbed:"+t.Token), true); err != nil {
+						return err
+					}
+				}
+				if len(d.Pairs) > 0 || d.Kind == "drop" {
 					continue
 				}
 			}

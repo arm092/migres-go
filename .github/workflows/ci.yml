@@ -61,7 +61,7 @@ jobs:
           go-version: '1.26.9'
       - run: docker compose -p migres-go-test -f test/compose.yml up -d --wait mysql
       - run: docker compose -p migres-go-replicated -f test/replicated.yml up -d --wait
-      - run: go test ./test -run 'TestReplicated|TestReplicaLoss|TestCompoundAlterReplayReusedName|TestRenameReplay|TestRebuildSupersedingDDL' -v -count=1 -timeout=10m
+      - run: go test ./test -run 'TestReplicated|TestReplicaLoss|TestCompoundAlterReplayReusedName|TestRenameReplay|TestRebuildSupersedingDDL|TestCompoundTableRenameLostResponse|TestAlterDefaultReplayAfterLostResponse|TestAlterDefaultCompoundBackfill|TestAlterDefaultRejectsPartialClusterMetadata' -v -count=1 -timeout=10m
         env:
           MIGRES_INTEGRATION: '1'
           MIGRES_REPLICATED: '1'

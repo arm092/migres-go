@@ -283,6 +283,7 @@ func (c *ClickHouse) DDL(ctx context.Context, t model.Task) error {
 	case "rename":
 		return c.RenameTask(ctx, t, d.Pairs, cluster)
 	case "alter":
+		if len(d.Pairs) > 0 { return c.CompoundAlter(ctx, t, d.Pairs, cluster) }
 		return c.Alter(ctx, t)
 	default:
 		return fmt.Errorf("unsupported DDL")

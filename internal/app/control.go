@@ -193,6 +193,11 @@ func (a *App) Serve(ctx context.Context) error {
 			}
 			return nil
 		case err := <-done:
+			// Publish health state before the durable diagnostic becomes visible
+			// to concurrent status requests.
+			running = false
+			a.Ready.Store(false)
+			a.Blocked.Store(err != nil)
 			if err != nil {
 				a.Store.SetMeta("last_error", err.Error())
 			}
@@ -200,9 +205,6 @@ func (a *App) Serve(ctx context.Context) error {
 				stop()
 				return nil
 			}
-			running = false
-			a.Ready.Store(false)
-			a.Blocked.Store(err != nil)
 			retryPending = err != nil && pipeline.Transient(err)
 		case msg := <-requests:
 			req := msg.req
@@ -527,6 +529,9 @@ func (a *App) schemasAt(p model.Position) ([]model.Schema, error) {
 		switch d.Kind {
 		case "create", "alter":
 			if e.Schema != nil {
+				for _, pair := range d.Pairs {
+					delete(byName, pair[0])
+				}
 				byName[e.Schema.Table] = *e.Schema
 			}
 		case "drop":

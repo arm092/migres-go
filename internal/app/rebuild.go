@@ -27,10 +27,52 @@ type rebuildState struct {
 	Step        string
 }
 
-func (a *App) Execute(ctx context.Context, t model.Task) error {
+func (a *App) Execute(ctx context.Context, t model.Task) (result error) {
 	if t.Kind == "ddl" {
 		a.DDLRunning.Store(true)
 		defer a.DDLRunning.Store(false)
+	}
+	if t.Kind == "ddl" && t.SQL != "" {
+		d, err := schema.Parse(t.SQL)
+		if err != nil {
+			return err
+		}
+		if d.Kind == "alter" && len(d.Pairs) > 0 {
+			a.Ready.Store(false)
+			defer func() {
+				if result == nil {
+					var done, pending bool
+					a.Store.Meta("snapshot_done", &done)
+					a.Store.Meta("resnapshot_pending", &pending)
+					a.Ready.Store(done && !pending)
+				}
+			}()
+			cluster := ""
+			if a.Config.ClickHouse.Engine == "ReplicatedReplacingMergeTree" {
+				cluster = " ON CLUSTER " + schema.Quote(a.Config.ClickHouse.Cluster)
+			}
+			work, err := a.Sink.PrepareCompoundAlter(ctx, t, d.Pairs, cluster)
+			if err != nil {
+				return err
+			}
+			var absorbed bool
+			if err = a.Store.Meta("compoundabsorbed:"+t.Token, &absorbed); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			if absorbed {
+				return nil
+			}
+			var snapshotDone bool
+			if err = a.Store.Meta("snapshot_done", &snapshotDone); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			// The original snapshot job may have stopped at the renamed source
+			// name. Copy the final lineage fully before publishing readiness.
+			if !snapshotDone {
+				work.Rebuild = true
+			}
+			t = work
+		}
 	}
 	if t.Kind == "ddl" && t.Rebuild {
 		if err := a.rebuild(ctx, t); err != nil {

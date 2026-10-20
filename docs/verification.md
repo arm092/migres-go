@@ -61,7 +61,7 @@ Local maintenance acceptance also covers:
 - Offline backup/restore of checkpoints, event/task queues, staged transactions, instance identity, schema generations, operation state, task IDs, versions, and deduplication tokens; corruption and live-owner rejection; competing exports cannot overwrite the winner. A full tmpfs export publishes no incomplete backup and succeeds on retry after space is freed.
 - Restored CDC catching up source changes made while stopped, including composite-key changes and deletes, against the unchanged target.
 - Eight large drained queue bursts reusing pages, 2,000 retained boundary/version pairs surviving compaction, and separate history/free-page metrics.
-- Mixed selected/excluded RENAME/DROP and excluded unsupported ALTER isolation, compound column changes/defaults, and replay after name reuse. Selected unsupported combined table-rename ALTER and ALTER COLUMN SET DEFAULT deliberately stop before target changes; use separate supported statements/CHANGE definitions.
+- Mixed selected/excluded RENAME/DROP and excluded unsupported ALTER isolation, compound column changes/defaults, and replay after name reuse. SET/DROP DEFAULT and compound ALTER with table rename are supported, including lost DDL responses, journal reopen, type-changing rebuild, earlier queued rebuild, and initial snapshot. Unknown operations still fail closed.
 - A 200 ms shutdown deadline during snapshot INSERT, CDC INSERT, transformer batching wait, and rebuild shadow INSERT, followed by journal reopen and exact recovery. The INSERT gate is injected at the real driver's cooperative batch boundary; this is not a hung-kernel test. Transformer unit tests also cancel inside row conversion and retain the whole unacknowledged batch.
 - Both debug event/task archives expiring old rows while retaining fresh rows through background TTL on ClickHouse 24.8 and 26.8. Only fixture tables use `merge_with_ttl_timeout=1`; production uses normal asynchronous scheduling. Retention changes are reconciled on the next archive write after restart, and normal mode creates no debug archives.
 
@@ -75,6 +75,13 @@ go test ./internal/journal -run 'TestOfflineBackupRestore|TestJournalGrowthAndCo
 ```
 
 The recorded 24-hour result above applies to runtime `90fca7f`. Subsequent maintenance/filter/TTL/cancellation changes require their own continuous qualification; short regression runs do not transfer that result to a new runtime.
+
+DEFAULT regression fixtures assert unchanged negative Int64 values, decimals, nullable values, timestamp precision, actual source-defaulted inserts, and per-replica default metadata after replay. BIT and binary hex defaults are checked at snapshot, ADD, SET, and subsequent insert, including zero bytes. They also simulate virtual columns left by an older target schema: SET/DROP must preserve the old effective values. Compound rename fixtures inject response loss after target rename and after column ADD, reopen the journal, and repeat the task without losing renamed column values or changing the Keeper path. A deliberately partial cluster DEFAULT update cannot receive a completion marker until both replicas match.
+
+```sh
+MIGRES_INTEGRATION=1 go test ./test \
+  -run 'TestAlterDefault|TestCompoundTableRename' -race -v -count=1 -timeout=5m
+```
 
 Implemented checks cover durable handoffs, composite keys and key changes, rollback, restart, schema changes/rebuilds, name reuse, chained rename replay, reset ownership, missing binlogs, quorum failure/failover, partial DDL, disk exhaustion, and snapshot SIGTERM/SIGKILL in GTID/signal modes. TLS fixtures have exercised trusted and unknown CAs; notification payload/rate contracts use local HTTP mocks.
 

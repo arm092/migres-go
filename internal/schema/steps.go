@@ -37,6 +37,18 @@ func AlterSteps(sql string, c config.Config) ([]AlterStep, error) {
 				}
 				out = append(out, AlterStep{Kind: "add", Name: col.Name, Column: col})
 			}
+		case ast.AlterTableAlterColumn:
+			for _, def := range sp.NewColumns {
+				col := model.Column{Name: def.Name.Name.O}
+				for _, option := range def.Options {
+					if option.Expr != nil {
+						if err := setDefault(&col, option.Expr); err != nil {
+							return nil, err
+						}
+					}
+				}
+				out = append(out, AlterStep{Kind: "default", Name: col.Name, Column: col})
+			}
 		case ast.AlterTableDropColumn:
 			out = append(out, AlterStep{Kind: "drop", Name: sp.OldColumnName.Name.O})
 		case ast.AlterTableRenameColumn:

@@ -281,8 +281,7 @@ func TestCompoundAlterCDC(t *testing.T) {
 
 func TestUnsupportedAlterStopsBeforeApplying(t *testing.T) {
 	for _, tc := range []struct{ name, clause, expected string }{
-		{"combined_table_rename", "ADD COLUMN extra INT NOT NULL DEFAULT 4, RENAME TO `%s`", "combined ALTER RENAME TABLE"},
-		{"alter_default", "ALTER COLUMN value SET DEFAULT 7", "unsupported ALTER operation"},
+		{"force", "FORCE", "unsupported ALTER operation"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := testConfig(t)

@@ -350,6 +350,9 @@ func (p *Producer) Run(ctx context.Context) error {
 				if e != nil {
 					return e
 				}
+				if fresh.Table != old.Table {
+					remove = append(remove, old.Table)
+				}
 				event.Previous = &old
 				fresh.Revision = event.SourceID
 				event.Schema = &fresh
